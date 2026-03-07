@@ -1,0 +1,53 @@
+# ========================
+# Python
+# ========================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Environment variables (NEVER commit these)
+.env
+backend/.env
+
+# SQLite database
+*.db
+*.sqlite3
+
+# Logs
+*.log
+
+# ========================
+# Node / Next.js
+# ========================
+node_modules/
+.next/
+out/
+.npm
+.yarn/cache
+
+# Local env files
+frontend/.env.local
+frontend/.env.development.local
+frontend/.env.test.local
+frontend/.env.production.local
+
+# ========================
+# IDE / OS
+# ========================
+.vscode/
+.idea/
+*.DS_Store
+Thumbs.db
+desktop.ini
