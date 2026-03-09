@@ -1,3 +1,4 @@
+import threading
 from fastapi import FastAPI, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
@@ -91,6 +92,21 @@ def startup():
             print(f"✅ {added} categorias adicionadas!")
     finally:
         db.close()
+
+    # Inicia o bot do Telegram em thread separada
+    from config import TELEGRAM_BOT_TOKEN
+    if TELEGRAM_BOT_TOKEN:
+        def _run_bot():
+            try:
+                from bot import main as bot_main
+                bot_main()
+            except Exception as e:
+                print(f"❌ Erro no bot Telegram: {e}")
+        bot_thread = threading.Thread(target=_run_bot, daemon=True)
+        bot_thread.start()
+        print("🤖 Bot do Telegram iniciado em background!")
+    else:
+        print("⚠️  TELEGRAM_BOT_TOKEN não configurado — bot desativado.")
 
 
 # ==================== AUTH ====================
