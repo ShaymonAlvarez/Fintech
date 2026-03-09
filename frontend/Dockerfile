@@ -14,6 +14,4 @@ ENV HOSTNAME=0.0.0.0
 
 RUN npm run build
 
-EXPOSE 3000
-
-CMD ["npx", "next", "start", "-p", "3000", "-H", "0.0.0.0"]
+CMD ["sh", "-c", "npx next start -H 0.0.0.0 -p ${PORT:-3000}"]
