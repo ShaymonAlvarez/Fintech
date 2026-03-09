@@ -81,8 +81,6 @@ function PaymentPreview({
 }
 
 export default function SalaryModal({ onClose, onSaved }: SalaryModalProps) {
-  const isDemo = typeof window !== "undefined" && localStorage.getItem("demo_mode") === "true";
-
   const [totalAmount, setTotalAmount] = useState("");
   const [hasTwoParts, setHasTwoParts] = useState(false);
   const [part1Amount, setPart1Amount] = useState("");
@@ -94,15 +92,6 @@ export default function SalaryModal({ onClose, onSaved }: SalaryModalProps) {
 
   // Carrega config existente
   useEffect(() => {
-    if (isDemo) {
-      setTotalAmount("6700");
-      setHasTwoParts(true);
-      setPart1Amount("3350");
-      setPart1Day(15);
-      setPart2Amount("3350");
-      setPart2Day(30);
-      return;
-    }
     api.get("/salary/config").then((cfg) => {
       if (cfg) {
         setTotalAmount(String(cfg.total_amount));
@@ -113,7 +102,7 @@ export default function SalaryModal({ onClose, onSaved }: SalaryModalProps) {
         if (cfg.part2_day) setPart2Day(cfg.part2_day);
       }
     }).catch(() => {});
-  }, [isDemo]);
+  }, []);
 
   // Sincroniza part1Amount ao mudar total (quando 1 parcela)
   useEffect(() => {
@@ -137,12 +126,6 @@ export default function SalaryModal({ onClose, onSaved }: SalaryModalProps) {
         );
         return;
       }
-    }
-
-    if (isDemo) {
-      onSaved();
-      onClose();
-      return;
     }
 
     setLoading(true);

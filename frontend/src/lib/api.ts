@@ -22,9 +22,9 @@ class ApiClient {
     return res.json();
   }
 
-  async post(endpoint: string, body: unknown) {
+  async post(endpoint: string, body: unknown, method: string = "POST") {
     const res = await fetch(`${API_URL}${endpoint}`, {
-      method: "POST",
+      method,
       headers: this.getHeaders(),
       body: JSON.stringify(body),
     });

@@ -1,7 +1,9 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import Sidebar from "@/components/Sidebar";
+import { api } from "@/lib/api";
 import {
   Sparkles,
   Menu,
@@ -15,9 +17,7 @@ import {
   ChevronRight,
   Tag,
   Wallet,
-  TrendingDown,
   Info,
-  ArrowRight,
 } from "lucide-react";
 
 // ==================== TYPES ====================
@@ -36,8 +36,10 @@ interface Scenario {
   color: string;
   month: number;
   year: number;
-  notes: string;
+  notes: string | null;
+  total_estimated: number;
   items: ScenarioItem[];
+  created_at: string;
 }
 
 // ==================== PRE-DEFINED CATEGORIES ====================
@@ -74,47 +76,6 @@ function fmt(v: number) {
   return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
-// ==================== DEMO DATA ====================
-
-const DEMO_SCENARIOS: Scenario[] = [
-  {
-    id: 1, name: "Passeio SP", icon: "🏃", color: "#06B6D4",
-    month: 3, year: 2026, notes: "Passeio no centro com amigos",
-    items: [
-      { id: 1, category_name: "CPTM",        icon: "🚇", estimated_amount: 12   },
-      { id: 2, category_name: "UBER",        icon: "🚕", estimated_amount: 60   },
-      { id: 3, category_name: "LOJAS",       icon: "🛍️", estimated_amount: 150  },
-      { id: 4, category_name: "CINEMA",      icon: "🎬", estimated_amount: 45   },
-      { id: 5, category_name: "RESTAURANTE", icon: "🍽️", estimated_amount: 90   },
-      { id: 6, category_name: "CAFÉ",        icon: "☕", estimated_amount: 18   },
-    ],
-  },
-  {
-    id: 2, name: "Ensaio de Banda", icon: "🎸", color: "#8B5CF6",
-    month: 3, year: 2026, notes: "Ensaio sábado no estúdio",
-    items: [
-      { id: 7,  category_name: "CPTM",        icon: "🚇", estimated_amount: 12   },
-      { id: 8,  category_name: "UBER",        icon: "🚕", estimated_amount: 45   },
-      { id: 9,  category_name: "STUDIO",      icon: "🎸", estimated_amount: 100  },
-      { id: 10, category_name: "RESTAURANTE", icon: "🍽️", estimated_amount: 40   },
-      { id: 11, category_name: "VR/VA",       icon: "🍱", estimated_amount: 35   },
-    ],
-  },
-  {
-    id: 3, name: "Jantar Especial", icon: "🎉", color: "#EC4899",
-    month: 3, year: 2026, notes: "Aniversário da namorada",
-    items: [
-      { id: 12, category_name: "UBER",        icon: "🚕", estimated_amount: 80   },
-      { id: 13, category_name: "RESTAURANTE", icon: "🍽️", estimated_amount: 280  },
-      { id: 14, category_name: "CAFÉ",        icon: "☕", estimated_amount: 35   },
-    ],
-  },
-];
-
-// Simulated monthly data for impact panel
-const DEMO_SALARY  = 6700;
-const DEMO_RECORRENTE = 3581;
-
 // ==================== FORM STATE ====================
 
 interface FormItem {
@@ -146,11 +107,12 @@ const EMPTY_FORM: FormState = {
 // ==================== COMPONENT ====================
 
 export default function CenariosPage() {
+  const router = useRouter();
   const today = new Date();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [viewMonth, setViewMonth] = useState(today.getMonth() + 1);
   const [viewYear, setViewYear] = useState(today.getFullYear());
-  const [scenarios, setScenarios] = useState<Scenario[]>(DEMO_SCENARIOS);
+  const [scenarios, setScenarios] = useState<Scenario[]>([]);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [form, setForm] = useState<FormState>({ ...EMPTY_FORM });
@@ -160,17 +122,58 @@ export default function CenariosPage() {
   const [duplicateYear, setDuplicateYear] = useState(today.getFullYear());
   const [addingCustom, setAddingCustom] = useState(false);
   const [expandedScenario, setExpandedScenario] = useState<number | null>(null);
+  const [salary, setSalary] = useState(0);
+  const [recurringTotal, setRecurringTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
 
-  const currentMonthScenarios = useMemo(
-    () => scenarios.filter((s) => s.month === viewMonth && s.year === viewYear),
-    [scenarios, viewMonth, viewYear]
-  );
+  const loadScenarios = useCallback(async () => {
+    try {
+      const data = await api.get(`/scenarios?month=${viewMonth}&year=${viewYear}`);
+      setScenarios(data);
+    } catch (err: unknown) {
+      const e = err as { status?: number };
+      if (e.status === 401) {
+        localStorage.removeItem("token");
+        router.push("/login");
+      }
+    }
+    setLoading(false);
+  }, [viewMonth, viewYear, router]);
+
+  const loadImpactData = useCallback(async () => {
+    try {
+      const [salaryData, recurringData] = await Promise.allSettled([
+        api.get("/salary/config"),
+        api.get("/recurring"),
+      ]);
+      if (salaryData.status === "fulfilled" && salaryData.value) {
+        setSalary(salaryData.value.total_amount || 0);
+      }
+      if (recurringData.status === "fulfilled" && Array.isArray(recurringData.value)) {
+        const total = recurringData.value
+          .filter((r: { is_active: boolean }) => r.is_active)
+          .reduce((s: number, r: { amount: number }) => s + r.amount, 0);
+        setRecurringTotal(total);
+      }
+    } catch { /* silent */ }
+  }, []);
+
+  useEffect(() => {
+    const token = localStorage.getItem("token");
+    if (!token) { router.push("/login"); return; }
+    setLoading(true);
+    loadScenarios();
+    loadImpactData();
+  }, [loadScenarios, loadImpactData, router]);
+
+  const currentMonthScenarios = scenarios;
 
   const totalPlanned = currentMonthScenarios.reduce(
     (sum, s) => sum + s.items.reduce((a, i) => a + i.estimated_amount, 0), 0
   );
 
-  const projectedBalance = DEMO_SALARY - DEMO_RECORRENTE - totalPlanned;
+  const projectedBalance = salary - recurringTotal - totalPlanned;
 
   function prevMonth() {
     if (viewMonth === 1) { setViewMonth(12); setViewYear((y) => y - 1); }
@@ -195,7 +198,7 @@ export default function CenariosPage() {
       name: s.name,
       icon: s.icon,
       color: s.color,
-      notes: s.notes,
+      notes: s.notes || "",
       items: s.items.map((i) => ({
         category_name: i.category_name,
         icon: i.icon,
@@ -243,63 +246,77 @@ export default function CenariosPage() {
     setAddingCustom(false);
   }
 
-  function saveScenario() {
-    if (!form.name.trim()) return;
+  async function saveScenario() {
+    if (!form.name.trim() || saving) return;
+    setSaving(true);
+
     const items = form.items
       .filter((i) => parseFloat(i.estimated_amount) > 0)
-      .map((i, idx) => ({
-        id: idx + 1,
+      .map((i) => ({
         category_name: i.category_name,
         icon: i.icon,
         estimated_amount: parseFloat(i.estimated_amount) || 0,
       }));
 
-    if (editingId !== null) {
-      setScenarios((prev) =>
-        prev.map((s) =>
-          s.id === editingId
-            ? { ...s, name: form.name, icon: form.icon, color: form.color, notes: form.notes, items }
-            : s
-        )
-      );
-    } else {
-      const newScenario: Scenario = {
-        id: Date.now(),
-        name: form.name,
-        icon: form.icon,
-        color: form.color,
-        month: viewMonth,
-        year: viewYear,
-        notes: form.notes,
-        items,
-      };
-      setScenarios((prev) => [...prev, newScenario]);
+    try {
+      if (editingId !== null) {
+        await api.post(`/scenarios/${editingId}`, {
+          name: form.name,
+          icon: form.icon,
+          color: form.color,
+          notes: form.notes,
+          items,
+        }, "PUT");
+      } else {
+        await api.post("/scenarios", {
+          name: form.name,
+          icon: form.icon,
+          color: form.color,
+          month: viewMonth,
+          year: viewYear,
+          notes: form.notes,
+          items,
+        });
+      }
+      await loadScenarios();
+      setModalOpen(false);
+    } catch (err) {
+      console.error("Erro ao salvar cenário:", err);
     }
-    setModalOpen(false);
+    setSaving(false);
   }
 
-  function deleteScenario(id: number) {
-    setScenarios((prev) => prev.filter((s) => s.id !== id));
+  async function deleteScenario(id: number) {
+    try {
+      await api.delete(`/scenarios/${id}`);
+      await loadScenarios();
+    } catch (err) {
+      console.error("Erro ao excluir cenário:", err);
+    }
     setDeleteConfirm(null);
     if (expandedScenario === id) setExpandedScenario(null);
   }
 
-  function confirmDuplicate() {
-    const original = scenarios.find((s) => s.id === duplicateTarget);
-    if (!original) return;
-    const copy: Scenario = {
-      ...original,
-      id: Date.now(),
-      name: `${original.name} (cópia)`,
-      month: duplicateMonth,
-      year: duplicateYear,
-      items: original.items.map((i) => ({ ...i, id: i.id + 10000 })),
-    };
-    setScenarios((prev) => [...prev, copy]);
+  async function confirmDuplicate() {
+    if (!duplicateTarget) return;
+    try {
+      await api.post(`/scenarios/${duplicateTarget}/duplicate?month=${duplicateMonth}&year=${duplicateYear}`, {});
+      await loadScenarios();
+    } catch (err) {
+      console.error("Erro ao duplicar cenário:", err);
+    }
     setDuplicateTarget(null);
   }
 
   // ==================== RENDER ====================
+
+  if (loading) {
+    return (
+      <div className="flex h-screen bg-gray-950 text-gray-100 items-center justify-center">
+        <div className="w-8 h-8 border-2 border-yellow-400/30 border-t-yellow-400 rounded-full animate-spin" />
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-screen bg-gray-950 text-gray-100">
@@ -327,7 +344,6 @@ export default function CenariosPage() {
             <p className="text-xs text-gray-400">Planejamento por evento / situação</p>
           </div>
 
-          {/* Month picker */}
           <div className="ml-auto flex items-center gap-2 bg-gray-900 border border-gray-700 rounded-lg px-3 py-1.5">
             <button onClick={prevMonth} className="text-gray-400 hover:text-white transition"><ChevronLeft className="w-4 h-4" /></button>
             <span className="text-sm font-semibold text-white w-20 text-center">
@@ -371,28 +387,21 @@ export default function CenariosPage() {
                   >
                     {/* Card Header */}
                     <div className="flex items-center gap-4 px-5 py-4">
-                      {/* Icon badge */}
                       <div
                         className="w-11 h-11 rounded-xl flex items-center justify-center text-xl flex-shrink-0"
                         style={{ backgroundColor: `${s.color}22`, border: `1px solid ${s.color}44` }}
                       >
                         {s.icon}
                       </div>
-
-                      {/* Name + note */}
                       <div className="flex-1 min-w-0">
                         <h3 className="text-base font-bold text-white">{s.name}</h3>
                         {s.notes && <p className="text-xs text-gray-500 truncate">{s.notes}</p>}
                         <p className="text-xs text-gray-600 mt-0.5">{s.items.length} categorias</p>
                       </div>
-
-                      {/* Total */}
                       <div className="text-right flex-shrink-0">
                         <p className="text-lg font-bold" style={{ color: s.color }}>{fmt(total)}</p>
                         <p className="text-xs text-gray-600">estimado</p>
                       </div>
-
-                      {/* Actions */}
                       <div className="flex items-center gap-1 ml-2">
                         <button
                           onClick={() => setExpandedScenario(isExpanded ? null : s.id)}
@@ -425,7 +434,7 @@ export default function CenariosPage() {
                       </div>
                     </div>
 
-                    {/* Category chips (always visible) */}
+                    {/* Category chips */}
                     <div className="px-5 pb-4 flex flex-wrap gap-2">
                       {s.items.map((item) => (
                         <span
@@ -439,7 +448,7 @@ export default function CenariosPage() {
                       ))}
                     </div>
 
-                    {/* Expanded details: breakdown table */}
+                    {/* Expanded details */}
                     {isExpanded && (
                       <div className="border-t border-gray-800 bg-gray-800/20 px-5 py-4">
                         <p className="text-xs text-gray-500 uppercase tracking-wider mb-3">Detalhamento</p>
@@ -451,10 +460,7 @@ export default function CenariosPage() {
                                 <span className="text-sm w-5">{item.icon}</span>
                                 <span className="text-sm text-gray-300 w-32 truncate">{item.category_name}</span>
                                 <div className="flex-1 h-2 bg-gray-700 rounded-full overflow-hidden">
-                                  <div
-                                    className="h-full rounded-full"
-                                    style={{ width: `${pct}%`, backgroundColor: s.color }}
-                                  />
+                                  <div className="h-full rounded-full" style={{ width: `${pct}%`, backgroundColor: s.color }} />
                                 </div>
                                 <span className="text-sm font-medium text-gray-300 w-20 text-right">{fmt(item.estimated_amount)}</span>
                                 <span className="text-xs text-gray-600 w-10 text-right">{pct.toFixed(0)}%</span>
@@ -497,7 +503,6 @@ export default function CenariosPage() {
 
           {/* ===== IMPACT PANEL ===== */}
           <div className="space-y-4">
-            {/* Monthly impact summary */}
             <div className="bg-gray-900 rounded-2xl border border-gray-800 overflow-hidden">
               <div className="px-5 py-4 border-b border-gray-800 flex items-center gap-2">
                 <Wallet className="w-4 h-4 text-yellow-400" />
@@ -505,18 +510,15 @@ export default function CenariosPage() {
                 <span className="text-xs text-gray-600">{MONTHS_PT[viewMonth]}/{viewYear}</span>
               </div>
               <div className="p-5 space-y-4">
-                {/* Salary */}
                 <div className="flex justify-between items-center">
                   <span className="text-sm text-gray-400">💰 Salário</span>
-                  <span className="text-sm font-bold text-emerald-400">+{fmt(DEMO_SALARY)}</span>
+                  <span className="text-sm font-bold text-emerald-400">+{fmt(salary)}</span>
                 </div>
-                {/* Recurring */}
                 <div className="flex justify-between items-center">
                   <span className="text-sm text-gray-400">🔁 Recorrentes</span>
-                  <span className="text-sm font-bold text-red-400">-{fmt(DEMO_RECORRENTE)}</span>
+                  <span className="text-sm font-bold text-red-400">-{fmt(recurringTotal)}</span>
                 </div>
 
-                {/* Scenarios */}
                 {currentMonthScenarios.length > 0 && (
                   <>
                     <div className="border-t border-gray-800 pt-3">
@@ -543,7 +545,6 @@ export default function CenariosPage() {
                   </>
                 )}
 
-                {/* Divider */}
                 <div className="border-t-2 border-gray-700 pt-3">
                   <div className="flex justify-between items-center">
                     <span className="text-sm font-semibold text-gray-300">Saldo projetado</span>
@@ -553,7 +554,6 @@ export default function CenariosPage() {
                   </div>
                 </div>
 
-                {/* Warning */}
                 {projectedBalance < 0 && (
                   <div className="flex items-start gap-2 bg-red-900/20 border border-red-800/50 rounded-xl p-3">
                     <Info className="w-4 h-4 text-red-400 flex-shrink-0 mt-0.5" />
@@ -563,7 +563,7 @@ export default function CenariosPage() {
                   </div>
                 )}
 
-                {projectedBalance > 0 && projectedBalance < DEMO_SALARY * 0.1 && (
+                {projectedBalance > 0 && salary > 0 && projectedBalance < salary * 0.1 && (
                   <div className="flex items-start gap-2 bg-amber-900/20 border border-amber-800/50 rounded-xl p-3">
                     <Info className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
                     <p className="text-xs text-amber-300">
@@ -575,46 +575,48 @@ export default function CenariosPage() {
             </div>
 
             {/* Budget bar */}
-            <div className="bg-gray-900 rounded-2xl border border-gray-800 p-5">
-              <p className="text-xs text-gray-500 uppercase tracking-wider mb-3">Distribuição do salário</p>
-              {(() => {
-                const recPct = Math.min((DEMO_RECORRENTE / DEMO_SALARY) * 100, 100);
-                const cenPct = Math.min((totalPlanned / DEMO_SALARY) * 100, 100 - recPct);
-                const freePct = Math.max(100 - recPct - cenPct, 0);
-                return (
-                  <>
-                    <div className="h-5 bg-gray-800 rounded-full overflow-hidden flex mb-3">
-                      <div className="h-full bg-red-500 transition-all" style={{ width: `${recPct}%` }} title="Recorrentes" />
-                      <div className="h-full bg-yellow-500 transition-all" style={{ width: `${cenPct}%` }} title="Cenários" />
-                      <div className="h-full bg-emerald-600 transition-all" style={{ width: `${freePct}%` }} title="Livre" />
-                    </div>
-                    <div className="flex flex-col gap-1.5 text-xs">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <span className="w-2.5 h-2.5 rounded-full bg-red-500 inline-block" />
-                          <span className="text-gray-400">Recorrentes</span>
-                        </div>
-                        <span className="text-gray-300">{fmt(DEMO_RECORRENTE)} ({recPct.toFixed(0)}%)</span>
+            {salary > 0 && (
+              <div className="bg-gray-900 rounded-2xl border border-gray-800 p-5">
+                <p className="text-xs text-gray-500 uppercase tracking-wider mb-3">Distribuição do salário</p>
+                {(() => {
+                  const recPct = Math.min((recurringTotal / salary) * 100, 100);
+                  const cenPct = Math.min((totalPlanned / salary) * 100, 100 - recPct);
+                  const freePct = Math.max(100 - recPct - cenPct, 0);
+                  return (
+                    <>
+                      <div className="h-5 bg-gray-800 rounded-full overflow-hidden flex mb-3">
+                        <div className="h-full bg-red-500 transition-all" style={{ width: `${recPct}%` }} title="Recorrentes" />
+                        <div className="h-full bg-yellow-500 transition-all" style={{ width: `${cenPct}%` }} title="Cenários" />
+                        <div className="h-full bg-emerald-600 transition-all" style={{ width: `${freePct}%` }} title="Livre" />
                       </div>
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <span className="w-2.5 h-2.5 rounded-full bg-yellow-500 inline-block" />
-                          <span className="text-gray-400">Cenários</span>
+                      <div className="flex flex-col gap-1.5 text-xs">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className="w-2.5 h-2.5 rounded-full bg-red-500 inline-block" />
+                            <span className="text-gray-400">Recorrentes</span>
+                          </div>
+                          <span className="text-gray-300">{fmt(recurringTotal)} ({recPct.toFixed(0)}%)</span>
                         </div>
-                        <span className="text-gray-300">{fmt(totalPlanned)} ({cenPct.toFixed(0)}%)</span>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <span className="w-2.5 h-2.5 rounded-full bg-emerald-600 inline-block" />
-                          <span className="text-gray-400">Livre</span>
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className="w-2.5 h-2.5 rounded-full bg-yellow-500 inline-block" />
+                            <span className="text-gray-400">Cenários</span>
+                          </div>
+                          <span className="text-gray-300">{fmt(totalPlanned)} ({cenPct.toFixed(0)}%)</span>
                         </div>
-                        <span className="text-gray-300">{fmt(Math.max(DEMO_SALARY - DEMO_RECORRENTE - totalPlanned, 0))} ({freePct.toFixed(0)}%)</span>
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className="w-2.5 h-2.5 rounded-full bg-emerald-600 inline-block" />
+                            <span className="text-gray-400">Livre</span>
+                          </div>
+                          <span className="text-gray-300">{fmt(Math.max(salary - recurringTotal - totalPlanned, 0))} ({freePct.toFixed(0)}%)</span>
+                        </div>
                       </div>
-                    </div>
-                  </>
-                );
-              })()}
-            </div>
+                    </>
+                  );
+                })()}
+              </div>
+            )}
 
             {/* Quick stats */}
             <div className="grid grid-cols-2 gap-3">
@@ -638,7 +640,6 @@ export default function CenariosPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black/75" onClick={() => setModalOpen(false)} />
           <div className="relative bg-gray-900 rounded-2xl border border-gray-700 w-full max-w-2xl shadow-2xl flex flex-col max-h-[92vh]">
-            {/* Modal header */}
             <div className="flex items-center justify-between px-6 py-4 border-b border-gray-800">
               <h2 className="text-lg font-bold text-white">
                 {editingId ? "Editar Cenário" : "Novo Cenário de Gasto"}
@@ -649,10 +650,9 @@ export default function CenariosPage() {
             </div>
 
             <div className="overflow-y-auto flex-1">
-              {/* ── Section 1: Name, Icon, Color ── */}
+              {/* Section 1: Name, Icon, Color */}
               <div className="px-6 py-5 border-b border-gray-800 space-y-4">
                 <div className="flex gap-4">
-                  {/* Icon picker */}
                   <div className="flex-shrink-0">
                     <label className="block text-xs text-gray-400 mb-2">Ícone</label>
                     <div className="w-12 h-12 rounded-xl flex items-center justify-center text-2xl cursor-pointer border border-gray-700 bg-gray-800"
@@ -672,7 +672,6 @@ export default function CenariosPage() {
                     </div>
                   </div>
 
-                  {/* Name + color + notes */}
                   <div className="flex-1 space-y-3">
                     <div>
                       <label className="block text-xs text-gray-400 mb-1">Nome do cenário *</label>
@@ -709,7 +708,7 @@ export default function CenariosPage() {
                 </div>
               </div>
 
-              {/* ── Section 2: Categories ── */}
+              {/* Section 2: Categories */}
               <div className="px-6 py-5">
                 <div className="flex items-center justify-between mb-3">
                   <p className="text-sm font-semibold text-gray-300">Categorias de gasto</p>
@@ -721,7 +720,6 @@ export default function CenariosPage() {
                   </span>
                 </div>
 
-                {/* Preset chips */}
                 <div className="flex flex-wrap gap-2 mb-4">
                   {PRESET_CATEGORIES.map((p) => {
                     const selected = form.items.some((i) => i.category_name === p.name);
@@ -739,8 +737,6 @@ export default function CenariosPage() {
                       </button>
                     );
                   })}
-
-                  {/* Add custom */}
                   <button
                     onClick={() => setAddingCustom(true)}
                     className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full border border-dashed border-gray-600 text-gray-500 hover:text-gray-300 hover:border-gray-500 transition"
@@ -749,7 +745,6 @@ export default function CenariosPage() {
                   </button>
                 </div>
 
-                {/* Custom category input */}
                 {addingCustom && (
                   <div className="flex gap-2 mb-4 bg-gray-800 rounded-xl p-3">
                     <input
@@ -777,7 +772,6 @@ export default function CenariosPage() {
                   </div>
                 )}
 
-                {/* Selected items — amount inputs */}
                 {form.items.length > 0 && (
                   <div className="space-y-2">
                     <p className="text-xs text-gray-500 mb-2">Defina o valor estimado para cada categoria:</p>
@@ -804,8 +798,6 @@ export default function CenariosPage() {
                         </button>
                       </div>
                     ))}
-
-                    {/* Running total */}
                     <div className="flex justify-between items-center pt-2 border-t border-gray-700 mt-3">
                       <span className="text-sm text-gray-400">Total estimado</span>
                       <span className="text-base font-bold text-yellow-400">
@@ -823,7 +815,6 @@ export default function CenariosPage() {
               </div>
             </div>
 
-            {/* Modal footer */}
             <div className="px-6 py-4 border-t border-gray-800 flex gap-3">
               <button
                 onClick={() => setModalOpen(false)}
@@ -833,11 +824,11 @@ export default function CenariosPage() {
               </button>
               <button
                 onClick={saveScenario}
-                disabled={!form.name.trim() || form.items.length === 0}
+                disabled={!form.name.trim() || form.items.length === 0 || saving}
                 className="flex-1 bg-yellow-500 hover:bg-yellow-400 disabled:bg-gray-700 disabled:text-gray-500 text-black font-semibold text-sm py-2.5 rounded-lg transition flex items-center justify-center gap-2"
               >
                 <Check className="w-4 h-4" />
-                {editingId ? "Salvar alterações" : "Criar Cenário"}
+                {saving ? "Salvando..." : editingId ? "Salvar alterações" : "Criar Cenário"}
               </button>
             </div>
           </div>

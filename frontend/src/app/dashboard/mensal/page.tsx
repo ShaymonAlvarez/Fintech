@@ -23,25 +23,6 @@ interface CategoryDetail {
   transaction_count: number;
 }
 
-const DEMO_DETAILS: CategoryDetail[] = [
-  { category_id: 1,  category_name: "Renda",           category_icon: "💰", category_color: "#22C55E", total: 6700,   budget: null, percentage_used: null, status: "none",    transaction_count: 2  },
-  { category_id: 2,  category_name: "Cartões Gastos",  category_icon: "💳", category_color: "#6366F1", total: 1850,   budget: 2000, percentage_used: 92.5, status: "danger",  transaction_count: 8  },
-  { category_id: 3,  category_name: "Investimentos",   category_icon: "📈", category_color: "#10B981", total: 1000,   budget: 1500, percentage_used: 66.7, status: "ok",      transaction_count: 1  },
-  { category_id: 4,  category_name: "Mercados/Feiras", category_icon: "🛒", category_color: "#84CC16", total: 680,    budget: 700,  percentage_used: 97.1, status: "danger",  transaction_count: 6  },
-  { category_id: 5,  category_name: "Restaurante",     category_icon: "🍽️", category_color: "#EF4444", total: 450,    budget: 400,  percentage_used: 112.5,status: "over",    transaction_count: 4  },
-  { category_id: 6,  category_name: "E-Commerce",      category_icon: "📦", category_color: "#F97316", total: 380,    budget: null, percentage_used: null, status: "none",    transaction_count: 5  },
-  { category_id: 7,  category_name: "Saúde",           category_icon: "💊", category_color: "#16A34A", total: 350,    budget: 500,  percentage_used: 70,   status: "warning", transaction_count: 2  },
-  { category_id: 8,  category_name: "Lazer",           category_icon: "🎮", category_color: "#06B6D4", total: 290,    budget: 350,  percentage_used: 82.9, status: "warning", transaction_count: 3  },
-  { category_id: 9,  category_name: "iFood",           category_icon: "🛵", category_color: "#FF6900", total: 250,    budget: 300,  percentage_used: 83.3, status: "warning", transaction_count: 7  },
-  { category_id: 10, category_name: "Itens de Lazer",  category_icon: "🎯", category_color: "#8B5CF6", total: 450,    budget: null, percentage_used: null, status: "none",    transaction_count: 2  },
-  { category_id: 11, category_name: "Uber/99/Taxi",    category_icon: "🚕", category_color: "#F59E0B", total: 180,    budget: 200,  percentage_used: 90,   status: "danger",  transaction_count: 5  },
-  { category_id: 12, category_name: "CPTM",            category_icon: "🚇", category_color: "#3B82F6", total: 120,    budget: 150,  percentage_used: 80,   status: "warning", transaction_count: 30 },
-  { category_id: 13, category_name: "Empréstimos",     category_icon: "🏦", category_color: "#DC2626", total: 800,    budget: 800,  percentage_used: 100,  status: "over",    transaction_count: 2  },
-  { category_id: 14, category_name: "Presentes",       category_icon: "🎁", category_color: "#EC4899", total: 150,    budget: null, percentage_used: null, status: "none",    transaction_count: 1  },
-  { category_id: 15, category_name: "Ajudas em Geral", category_icon: "🤝", category_color: "#A855F7", total: 300,    budget: null, percentage_used: null, status: "none",    transaction_count: 3  },
-  { category_id: 16, category_name: "Ajuda",           category_icon: "❤️", category_color: "#F43F5E", total: 0,      budget: null, percentage_used: null, status: "none",    transaction_count: 0  },
-];
-
 const STATUS_CONFIG = {
   none:    { bar: "#6B7280", bg: "bg-gray-500/10", badge: "",                 label: ""          },
   ok:      { bar: "#22C55E", bg: "bg-emerald-500/10", badge: "text-emerald-400", label: "✓ OK"  },
@@ -234,19 +215,8 @@ export default function MensalPage() {
   const [details, setDetails] = useState<CategoryDetail[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const isDemo =
-    typeof window !== "undefined" &&
-    localStorage.getItem("demo_mode") === "true";
-
   const loadData = useCallback(async () => {
     setLoading(true);
-
-    if (isDemo) {
-      await new Promise((r) => setTimeout(r, 400));
-      setDetails(DEMO_DETAILS);
-      setLoading(false);
-      return;
-    }
 
     try {
       const data = await api.get(
@@ -261,7 +231,7 @@ export default function MensalPage() {
       }
     }
     setLoading(false);
-  }, [month, year, isDemo, router]);
+  }, [month, year, router]);
 
   useEffect(() => {
     const token = localStorage.getItem("token");
@@ -270,18 +240,6 @@ export default function MensalPage() {
   }, [loadData, router]);
 
   const handleSetBudget = async (categoryId: number, amount: number) => {
-    if (isDemo) {
-      setDetails((prev) =>
-        prev.map((d) => {
-          if (d.category_id !== categoryId) return d;
-          const pct = d.total > 0 ? (d.total / amount) * 100 : 0;
-          const status =
-            pct === 0 ? "ok" : pct >= 100 ? "over" : pct >= 90 ? "danger" : pct >= 70 ? "warning" : "ok";
-          return { ...d, budget: amount, percentage_used: pct || null, status: pct > 0 ? status : "ok" };
-        })
-      );
-      return;
-    }
     try {
       await api.post("/budgets", { category_id: categoryId, budget_amount: amount });
       loadData();
@@ -289,16 +247,6 @@ export default function MensalPage() {
   };
 
   const handleRemoveBudget = async (categoryId: number) => {
-    if (isDemo) {
-      setDetails((prev) =>
-        prev.map((d) =>
-          d.category_id === categoryId
-            ? { ...d, budget: null, percentage_used: null, status: "none" }
-            : d
-        )
-      );
-      return;
-    }
     try {
       await api.delete(`/budgets/${categoryId}`);
       loadData();

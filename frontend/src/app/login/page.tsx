@@ -161,27 +161,6 @@ export default function LoginPage() {
           </p>
         </form>
 
-        {/* Modo Demo */}
-        <div className="mt-6 text-center">
-          <div className="relative flex items-center justify-center mb-4">
-            <div className="border-t border-white/10 w-full" />
-            <span className="absolute bg-[#0a0a1a] px-3 text-xs text-gray-600">ou</span>
-          </div>
-          <button
-            onClick={() => {
-              localStorage.setItem("token", "demo");
-              localStorage.setItem("demo_mode", "true");
-              router.push("/dashboard");
-            }}
-            className="w-full py-3 rounded-xl border border-violet-500/30 text-violet-400 font-medium hover:bg-violet-500/10 transition-all text-sm"
-          >
-            🎮 Entrar em Modo Demo
-          </button>
-          <p className="text-xs text-gray-600 mt-2">
-            Veja o dashboard com dados fictícios, sem precisar do backend
-          </p>
-        </div>
-
         <p className="text-center text-xs text-gray-700 mt-6">
           💬 Registre gastos pelo Telegram • 📊 Acompanhe aqui
         </p>

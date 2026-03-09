@@ -1,7 +1,9 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
+import { useRouter } from "next/navigation";
 import Sidebar from "@/components/Sidebar";
+import { api } from "@/lib/api";
 import {
   CalendarDays,
   Menu,
@@ -11,7 +13,6 @@ import {
   TrendingDown,
   Wallet,
   Target,
-  CheckCircle2,
   Clock,
   AlertTriangle,
   Pencil,
@@ -21,12 +22,18 @@ import {
 
 // ==================== TYPES ====================
 
-interface DailyEntry {
-  day: number;
+interface DailyFlowItem {
+  date: string;
+  day_of_week: string;
   income: number;
-  recurring: { name: string; amount: number; icon: string }[];
-  variable: number;
-  salaryLabel?: string;
+  recurring_expenses: number;
+  variable_expenses: number;
+  total_expense: number;
+  net: number;
+  running_balance: number;
+  is_today: boolean;
+  is_future: boolean;
+  events: string[];
 }
 
 interface WeekSummary {
@@ -38,50 +45,10 @@ interface WeekSummary {
   isCurrent: boolean;
 }
 
-// ==================== DEMO DATA ====================
-
-const DEMO_SALARY = { part1_amount: 3350, part1_day: 15, part2_amount: 3350, part2_day: 30 };
-
-const DEMO_RECURRING_DAILY: Record<number, { name: string; amount: number; icon: string }[]> = {
-  1:  [{ name: "Academia",           amount: 99,   icon: "💪" }, { name: "Cartão CPTM",      amount: 120,  icon: "🚇" }],
-  5:  [{ name: "Aluguel",            amount: 1200, icon: "🏠" }, { name: "Condomínio",       amount: 600,  icon: "🏢" }, { name: "Plano de Saúde",  amount: 350,  icon: "💊" }, { name: "Parc. Empréstimo", amount: 800, icon: "🏦" }],
-  10: [{ name: "Internet Fibra",     amount: 120,  icon: "📡" }, { name: "Celular",          amount: 80,   icon: "📱" }],
-  12: [{ name: "Luz / Energia",      amount: 150,  icon: "💡" }],
-  15: [{ name: "Spotify",            amount: 22,   icon: "🎵" }, { name: "Seguro Auto",      amount: 180,  icon: "🚗" }],
-  18: [{ name: "Água",               amount: 60,   icon: "💧" }],
-  20: [{ name: "Netflix",            amount: 40,   icon: "🎬" }, { name: "Prime Video",      amount: 19,   icon: "📺" }],
-};
-
-// Past actual variable spending (days already passed)
-const DEMO_VARIABLE_PAST: Record<number, number> = {
-  1: 45.90,
-  2: 132.50,
-  3: 0,
-  4: 89.00,
-  5: 0,
-  6: 215.80,
-  7: 67.30,
-  8: 0,
-  9: 178.40,
-  10: 55.00,
-  11: 0,
-  12: 98.60,
-  13: 143.20,
-  14: 34.90,
-  15: 312.00,
-};
-
-function getDaysInMonth(year: number, month: number) {
-  return new Date(year, month, 0).getDate();
-}
-
-function getWeekday(year: number, month: number, day: number) {
-  return new Date(year, month - 1, day).getDay(); // 0=Sun, 6=Sat
-}
-
-const WEEKDAYS_PT = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
-const MONTHS_PT = ["", "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
-  "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
+const MONTHS_PT = [
+  "", "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+  "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro",
+];
 
 function fmt(v: number, sign = false) {
   const s = Math.abs(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -89,96 +56,32 @@ function fmt(v: number, sign = false) {
   return s;
 }
 
-// ==================== BUILD DAILY DATA ====================
+function getWeekday(year: number, month: number, day: number) {
+  return new Date(year, month - 1, day).getDay();
+}
 
-function buildDailyFlow(year: number, month: number, weeklyBudget: number) {
+function getDaysInMonth(year: number, month: number) {
+  return new Date(year, month, 0).getDate();
+}
+
+function buildWeeks(entries: DailyFlowItem[], year: number, month: number, weeklyBudget: number): WeekSummary[] {
   const days = getDaysInMonth(year, month);
   const today = new Date();
   const todayDay = today.getDate();
   const isCurrentMonth = today.getFullYear() === year && today.getMonth() + 1 === month;
-
-  let runningBalance = 1500; // opening balance from previous month
-  const entries: (DailyEntry & {
-    date: string;
-    weekday: string;
-    recurringTotal: number;
-    totalExpense: number;
-    net: number;
-    balance: number;
-    isPast: boolean;
-    isToday: boolean;
-    isFuture: boolean;
-    isWeekend: boolean;
-    isSalaryDay: boolean;
-    salaryLabel?: string;
-  })[] = [];
-
-  for (let d = 1; d <= days; d++) {
-    const wdIndex = getWeekday(year, month, d);
-    const isWeekend = wdIndex === 0 || wdIndex === 6;
-    const isPast = isCurrentMonth ? d < todayDay : true;
-    const isToday = isCurrentMonth && d === todayDay;
-    const isFuture = isCurrentMonth ? d > todayDay : false;
-
-    // Income
-    let income = 0;
-    let salaryLabel: string | undefined;
-    if (d === DEMO_SALARY.part1_day) {
-      income += DEMO_SALARY.part1_amount;
-      salaryLabel = `💰 Salário Parte 1 — ${fmt(DEMO_SALARY.part1_amount)}`;
-    }
-    if (d === DEMO_SALARY.part2_day) {
-      income += DEMO_SALARY.part2_amount;
-      salaryLabel = (salaryLabel ? salaryLabel + " | " : "") + `💰 Salário Parte 2 — ${fmt(DEMO_SALARY.part2_amount)}`;
-    }
-
-    // Recurring
-    const recurring = DEMO_RECURRING_DAILY[d] ?? [];
-    const recurringTotal = recurring.reduce((s, r) => s + r.amount, 0);
-
-    // Variable (past = actual, future = 0)
-    const variable = !isFuture ? (DEMO_VARIABLE_PAST[d] ?? 0) : 0;
-
-    const totalExpense = recurringTotal + variable;
-    const net = income - totalExpense;
-    runningBalance += net;
-
-    entries.push({
-      day: d,
-      date: `${String(d).padStart(2, "0")}/${String(month).padStart(2, "0")}`,
-      weekday: WEEKDAYS_PT[wdIndex],
-      income,
-      recurring,
-      recurringTotal,
-      variable,
-      totalExpense,
-      net,
-      balance: runningBalance,
-      isPast,
-      isToday,
-      isFuture,
-      isWeekend,
-      isSalaryDay: income > 0,
-      salaryLabel,
-    });
-  }
-
-  // Build weekly summaries (week = Mon–Sun)
   const weeks: WeekSummary[] = [];
   let weekStart = 1;
 
   while (weekStart <= days) {
-    // Find the end of this week (next Sunday or end of month)
     const startWd = getWeekday(year, month, weekStart);
-    // days until Sunday (0=Sun): if startWd=0 it's already Sunday
     const daysToSunday = startWd === 0 ? 0 : 7 - startWd;
     const weekEnd = Math.min(weekStart + daysToSunday, days);
 
     let spent = 0;
     for (let d = weekStart; d <= weekEnd; d++) {
       const entry = entries[d - 1];
-      if (!entry.isFuture) {
-        spent += entry.totalExpense;
+      if (entry && !entry.is_future) {
+        spent += entry.total_expense;
       }
     }
 
@@ -195,12 +98,13 @@ function buildDailyFlow(year: number, month: number, weeklyBudget: number) {
     weekStart = weekEnd + 1;
   }
 
-  return { entries, weeks };
+  return weeks;
 }
 
 // ==================== COMPONENT ====================
 
 export default function DiarioPage() {
+  const router = useRouter();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const today = new Date();
   const [viewMonth, setViewMonth] = useState(today.getMonth() + 1);
@@ -210,16 +114,50 @@ export default function DiarioPage() {
   const [budgetInput, setBudgetInput] = useState("600");
   const [expandedDay, setExpandedDay] = useState<number | null>(null);
   const [showFuture, setShowFuture] = useState(true);
+  const [entries, setEntries] = useState<DailyFlowItem[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  const { entries, weeks } = useMemo(
-    () => buildDailyFlow(viewYear, viewMonth, weeklyBudget),
-    [viewYear, viewMonth, weeklyBudget]
+  const loadData = useCallback(async () => {
+    try {
+      const [flowData, budgetData] = await Promise.allSettled([
+        api.get(`/daily-flow?month=${viewMonth}&year=${viewYear}`),
+        api.get("/weekly-budget"),
+      ]);
+
+      if (flowData.status === "fulfilled") {
+        setEntries(flowData.value);
+      }
+
+      if (budgetData.status === "fulfilled") {
+        setWeeklyBudget(budgetData.value.amount);
+        setBudgetInput(String(budgetData.value.amount));
+      }
+    } catch (err: unknown) {
+      const e = err as { status?: number };
+      if (e.status === 401) {
+        localStorage.removeItem("token");
+        router.push("/login");
+      }
+    }
+    setLoading(false);
+  }, [viewMonth, viewYear, router]);
+
+  useEffect(() => {
+    const token = localStorage.getItem("token");
+    if (!token) { router.push("/login"); return; }
+    setLoading(true);
+    loadData();
+  }, [loadData, router]);
+
+  const weeks = useMemo(
+    () => buildWeeks(entries, viewYear, viewMonth, weeklyBudget),
+    [entries, viewYear, viewMonth, weeklyBudget]
   );
 
   const currentWeek = weeks.find((w) => w.isCurrent);
   const totalIncome = entries.reduce((s, e) => s + e.income, 0);
-  const totalExpense = entries.filter((e) => !e.isFuture).reduce((s, e) => s + e.totalExpense, 0);
-  const projectedExpense = entries.reduce((s, e) => s + e.recurringTotal, 0);
+  const totalExpense = entries.filter((e) => !e.is_future).reduce((s, e) => s + e.total_expense, 0);
+  const projectedExpense = entries.reduce((s, e) => s + e.recurring_expenses, 0);
 
   function prevMonth() {
     if (viewMonth === 1) { setViewMonth(12); setViewYear((y) => y - 1); }
@@ -230,13 +168,31 @@ export default function DiarioPage() {
     else setViewMonth((m) => m + 1);
   }
 
-  function saveBudget() {
+  async function saveBudget() {
     const v = parseFloat(budgetInput);
-    if (!isNaN(v) && v > 0) setWeeklyBudget(v);
+    if (!isNaN(v) && v > 0) {
+      setWeeklyBudget(v);
+      try {
+        await api.post("/weekly-budget", { amount: v });
+      } catch { /* silent */ }
+    }
     setEditingBudget(false);
   }
 
-  const displayEntries = showFuture ? entries : entries.filter((e) => !e.isFuture);
+  const displayEntries = showFuture ? entries : entries.filter((e) => !e.is_future);
+
+  // Parse day from date string "YYYY-MM-DD"
+  function dayFromDate(dateStr: string): number {
+    return parseInt(dateStr.split("-")[2], 10);
+  }
+
+  if (loading) {
+    return (
+      <div className="flex h-screen bg-gray-950 text-gray-100 items-center justify-center">
+        <div className="w-8 h-8 border-2 border-blue-400/30 border-t-blue-400 rounded-full animate-spin" />
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-screen bg-gray-950 text-gray-100">
@@ -261,7 +217,6 @@ export default function DiarioPage() {
             <h1 className="text-lg font-bold text-white">Fluxo Diário</h1>
             <p className="text-xs text-gray-400">Acompanhamento dia a dia</p>
           </div>
-          {/* Month picker */}
           <div className="ml-auto flex items-center gap-2 bg-gray-900 border border-gray-700 rounded-lg px-3 py-1.5">
             <button onClick={prevMonth} className="text-gray-400 hover:text-white transition"><ChevronLeft className="w-4 h-4" /></button>
             <span className="text-sm font-semibold text-white w-28 text-center">{MONTHS_PT[viewMonth]} {viewYear}</span>
@@ -302,8 +257,8 @@ export default function DiarioPage() {
                 <Wallet className="w-4 h-4 text-blue-400" />
                 <span className="text-xs text-gray-500">Saldo atual</span>
               </div>
-              <p className={`text-xl font-bold ${entries.find((e) => e.isToday)?.balance ?? entries[entries.length - 1]?.balance >= 0 ? "text-blue-400" : "text-red-400"}`}>
-                {fmt(entries.find((e) => e.isToday)?.balance ?? entries.filter((e) => !e.isFuture).at(-1)?.balance ?? 0)}
+              <p className={`text-xl font-bold ${(entries.find((e) => e.is_today)?.running_balance ?? entries.filter((e) => !e.is_future).at(-1)?.running_balance ?? 0) >= 0 ? "text-blue-400" : "text-red-400"}`}>
+                {fmt(entries.find((e) => e.is_today)?.running_balance ?? entries.filter((e) => !e.is_future).at(-1)?.running_balance ?? 0)}
               </p>
             </div>
           </div>
@@ -393,161 +348,165 @@ export default function DiarioPage() {
               </p>
             </div>
 
-            <div className="divide-y divide-gray-800/50">
-              {displayEntries.map((entry) => {
-                const isExpanded = expandedDay === entry.day;
-                const hasDetails = entry.recurring.length > 0 || entry.income > 0 || entry.variable > 0;
+            {entries.length === 0 ? (
+              <div className="p-12 text-center">
+                <CalendarDays className="w-12 h-12 text-gray-700 mx-auto mb-4" />
+                <p className="text-gray-500 text-sm">Nenhum dado para este mês</p>
+                <p className="text-gray-600 text-xs mt-1">Configure seu salário e despesas recorrentes para ver o fluxo</p>
+              </div>
+            ) : (
+              <div className="divide-y divide-gray-800/50">
+                {displayEntries.map((entry) => {
+                  const day = dayFromDate(entry.date);
+                  const isExpanded = expandedDay === day;
+                  const hasDetails = entry.events.length > 0;
+                  const isWeekend = (() => {
+                    const d = new Date(entry.date + "T12:00:00");
+                    return d.getDay() === 0 || d.getDay() === 6;
+                  })();
+                  const isSalaryDay = entry.income > 0;
 
-                const rowBg = entry.isToday
-                  ? "bg-blue-900/20 border-l-2 border-blue-500"
-                  : entry.isSalaryDay && !entry.isFuture
-                  ? "bg-emerald-900/10"
-                  : entry.isFuture
-                  ? "opacity-60"
-                  : "";
+                  const rowBg = entry.is_today
+                    ? "bg-blue-900/20 border-l-2 border-blue-500"
+                    : isSalaryDay && !entry.is_future
+                    ? "bg-emerald-900/10"
+                    : entry.is_future
+                    ? "opacity-60"
+                    : "";
 
-                const netColor = entry.net > 0 ? "text-emerald-400" : entry.net < 0 ? "text-red-400" : "text-gray-500";
-                const balColor = entry.balance > 0 ? "text-blue-300" : "text-red-400";
+                  const netColor = entry.net > 0 ? "text-emerald-400" : entry.net < 0 ? "text-red-400" : "text-gray-500";
+                  const balColor = entry.running_balance > 0 ? "text-blue-300" : "text-red-400";
 
-                return (
-                  <div key={entry.day} className={rowBg}>
-                    {/* Main row */}
-                    <button
-                      className="w-full text-left"
-                      onClick={() => setExpandedDay(isExpanded ? null : hasDetails ? entry.day : null)}>
-                      <div className="grid grid-cols-12 items-center gap-2 px-6 py-3 hover:bg-gray-800/30 transition">
-                        {/* Date */}
-                        <div className="col-span-3 sm:col-span-2 flex items-center gap-2">
-                          <div className={`flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center text-sm font-bold ${
-                            entry.isToday
-                              ? "bg-blue-600 text-white"
-                              : entry.isWeekend
-                              ? "bg-gray-800 text-gray-500"
-                              : entry.isFuture
-                              ? "bg-gray-800/50 text-gray-600"
-                              : "bg-gray-800 text-gray-200"
-                          }`}>
-                            {entry.day}
+                  return (
+                    <div key={day} className={rowBg}>
+                      <button
+                        className="w-full text-left"
+                        onClick={() => setExpandedDay(isExpanded ? null : hasDetails ? day : null)}>
+                        <div className="grid grid-cols-12 items-center gap-2 px-6 py-3 hover:bg-gray-800/30 transition">
+                          {/* Date */}
+                          <div className="col-span-3 sm:col-span-2 flex items-center gap-2">
+                            <div className={`flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center text-sm font-bold ${
+                              entry.is_today
+                                ? "bg-blue-600 text-white"
+                                : isWeekend
+                                ? "bg-gray-800 text-gray-500"
+                                : entry.is_future
+                                ? "bg-gray-800/50 text-gray-600"
+                                : "bg-gray-800 text-gray-200"
+                            }`}>
+                              {day}
+                            </div>
+                            <span className="text-xs text-gray-500 hidden sm:block">{entry.day_of_week}</span>
                           </div>
-                          <span className="text-xs text-gray-500 hidden sm:block">{entry.weekday}</span>
-                        </div>
 
-                        {/* Events summary */}
-                        <div className="col-span-5 sm:col-span-4 flex items-center gap-2 flex-wrap">
-                          {entry.isFuture && (
-                            <span className="text-xs text-gray-600 flex items-center gap-1">
-                              <Clock className="w-3 h-3" /> Previsto
-                            </span>
-                          )}
-                          {entry.isSalaryDay && (
-                            <span className="text-xs bg-emerald-900/50 text-emerald-300 px-2 py-0.5 rounded-full">
-                              💰 Salário
-                            </span>
-                          )}
-                          {entry.recurringTotal > 0 && (
-                            <span className="text-xs bg-red-900/30 text-red-300 px-2 py-0.5 rounded-full">
-                              🔁 {fmt(entry.recurringTotal)}
-                            </span>
-                          )}
-                          {entry.variable > 0 && (
-                            <span className="text-xs bg-gray-800 text-gray-400 px-2 py-0.5 rounded-full">
-                              Variável {fmt(entry.variable)}
-                            </span>
-                          )}
-                        </div>
-
-                        {/* Income */}
-                        <div className="col-span-0 sm:col-span-2 hidden sm:block text-right">
-                          {entry.income > 0 && (
-                            <span className="text-sm font-medium text-emerald-400">+{fmt(entry.income)}</span>
-                          )}
-                        </div>
-
-                        {/* Net */}
-                        <div className="col-span-2 text-right">
-                          <span className={`text-sm font-bold ${netColor}`}>
-                            {entry.net > 0 ? "+" : ""}{fmt(Math.abs(entry.net))}
-                          </span>
-                        </div>
-
-                        {/* Balance */}
-                        <div className="col-span-2 text-right">
-                          <span className={`text-sm font-semibold ${balColor}`}>{fmt(entry.balance)}</span>
-                          <p className="text-xs text-gray-600">saldo</p>
-                        </div>
-                      </div>
-                    </button>
-
-                    {/* Expanded details */}
-                    {isExpanded && (
-                      <div className="px-6 pb-4 bg-gray-800/20">
-                        <div className="ml-10 space-y-2">
-                          {/* Salary */}
-                          {entry.salaryLabel && (
-                            <div className="flex items-center gap-2 text-sm">
-                              <span className="w-3 h-3 rounded-full bg-emerald-400 flex-shrink-0" />
-                              <span className="text-emerald-300">{entry.salaryLabel}</span>
-                            </div>
-                          )}
-                          {/* Recurring items */}
-                          {entry.recurring.map((r, i) => (
-                            <div key={i} className="flex items-center justify-between text-sm">
-                              <div className="flex items-center gap-2">
-                                <span className="w-3 h-3 rounded-full bg-red-400 flex-shrink-0" />
-                                <span className="text-sm">{r.icon}</span>
-                                <span className="text-gray-300">{r.name}</span>
-                                <span className="text-xs text-gray-600 bg-gray-800 px-2 py-0.5 rounded-full">recorrente</span>
-                              </div>
-                              <span className="text-red-400 font-medium">{fmt(r.amount)}</span>
-                            </div>
-                          ))}
-                          {/* Variable */}
-                          {entry.variable > 0 && (
-                            <div className="flex items-center justify-between text-sm">
-                              <div className="flex items-center gap-2">
-                                <span className="w-3 h-3 rounded-full bg-gray-400 flex-shrink-0" />
-                                <span className="text-gray-300">Gastos variáveis do dia</span>
-                              </div>
-                              <span className="text-gray-400 font-medium">{fmt(entry.variable)}</span>
-                            </div>
-                          )}
-                          {/* Summary line */}
-                          <div className="flex justify-between pt-2 border-t border-gray-700 text-xs text-gray-500">
-                            <span>Total do dia</span>
-                            <div className="flex gap-4">
-                              {entry.income > 0 && <span className="text-emerald-400">+{fmt(entry.income)} entrada</span>}
-                              {entry.totalExpense > 0 && <span className="text-red-400">-{fmt(entry.totalExpense)} saída</span>}
-                              <span className={entry.net >= 0 ? "text-emerald-400" : "text-red-400"}>
-                                = {entry.net >= 0 ? "+" : ""}{fmt(Math.abs(entry.net))}
+                          {/* Events summary */}
+                          <div className="col-span-5 sm:col-span-4 flex items-center gap-2 flex-wrap">
+                            {entry.is_future && (
+                              <span className="text-xs text-gray-600 flex items-center gap-1">
+                                <Clock className="w-3 h-3" /> Previsto
                               </span>
+                            )}
+                            {isSalaryDay && (
+                              <span className="text-xs bg-emerald-900/50 text-emerald-300 px-2 py-0.5 rounded-full">
+                                💰 Salário
+                              </span>
+                            )}
+                            {entry.recurring_expenses > 0 && (
+                              <span className="text-xs bg-red-900/30 text-red-300 px-2 py-0.5 rounded-full">
+                                🔁 {fmt(entry.recurring_expenses)}
+                              </span>
+                            )}
+                            {entry.variable_expenses > 0 && (
+                              <span className="text-xs bg-gray-800 text-gray-400 px-2 py-0.5 rounded-full">
+                                Variável {fmt(entry.variable_expenses)}
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Income */}
+                          <div className="col-span-0 sm:col-span-2 hidden sm:block text-right">
+                            {entry.income > 0 && (
+                              <span className="text-sm font-medium text-emerald-400">+{fmt(entry.income)}</span>
+                            )}
+                          </div>
+
+                          {/* Net */}
+                          <div className="col-span-2 text-right">
+                            <span className={`text-sm font-bold ${netColor}`}>
+                              {entry.net > 0 ? "+" : ""}{fmt(Math.abs(entry.net))}
+                            </span>
+                          </div>
+
+                          {/* Balance */}
+                          <div className="col-span-2 text-right">
+                            <span className={`text-sm font-semibold ${balColor}`}>{fmt(entry.running_balance)}</span>
+                            <p className="text-xs text-gray-600">saldo</p>
+                          </div>
+                        </div>
+                      </button>
+
+                      {/* Expanded details */}
+                      {isExpanded && (
+                        <div className="px-6 pb-4 bg-gray-800/20">
+                          <div className="ml-10 space-y-2">
+                            {entry.events.map((evt, i) => (
+                              <div key={i} className="flex items-center gap-2 text-sm">
+                                <span className={`w-3 h-3 rounded-full flex-shrink-0 ${
+                                  evt.includes("Salário") ? "bg-emerald-400" : "bg-red-400"
+                                }`} />
+                                <span className={evt.includes("Salário") ? "text-emerald-300" : "text-gray-300"}>
+                                  {evt}
+                                </span>
+                              </div>
+                            ))}
+                            {entry.variable_expenses > 0 && (
+                              <div className="flex items-center justify-between text-sm">
+                                <div className="flex items-center gap-2">
+                                  <span className="w-3 h-3 rounded-full bg-gray-400 flex-shrink-0" />
+                                  <span className="text-gray-300">Gastos variáveis do dia</span>
+                                </div>
+                                <span className="text-gray-400 font-medium">{fmt(entry.variable_expenses)}</span>
+                              </div>
+                            )}
+                            <div className="flex justify-between pt-2 border-t border-gray-700 text-xs text-gray-500">
+                              <span>Total do dia</span>
+                              <div className="flex gap-4">
+                                {entry.income > 0 && <span className="text-emerald-400">+{fmt(entry.income)} entrada</span>}
+                                {entry.total_expense > 0 && <span className="text-red-400">-{fmt(entry.total_expense)} saída</span>}
+                                <span className={entry.net >= 0 ? "text-emerald-400" : "text-red-400"}>
+                                  = {entry.net >= 0 ? "+" : ""}{fmt(Math.abs(entry.net))}
+                                </span>
+                              </div>
                             </div>
                           </div>
                         </div>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
 
             {/* Table footer */}
-            <div className="px-6 py-4 border-t border-gray-700 bg-gray-800/30 grid grid-cols-12 gap-2">
-              <div className="col-span-7 sm:col-span-6 text-sm font-bold text-gray-300">Total do Mês</div>
-              <div className="col-span-0 sm:col-span-2 hidden sm:block text-right text-sm font-bold text-emerald-400">
-                +{fmt(totalIncome)}
+            {entries.length > 0 && (
+              <div className="px-6 py-4 border-t border-gray-700 bg-gray-800/30 grid grid-cols-12 gap-2">
+                <div className="col-span-7 sm:col-span-6 text-sm font-bold text-gray-300">Total do Mês</div>
+                <div className="col-span-0 sm:col-span-2 hidden sm:block text-right text-sm font-bold text-emerald-400">
+                  +{fmt(totalIncome)}
+                </div>
+                <div className="col-span-2 text-right">
+                  <span className={`text-sm font-bold ${totalIncome - totalExpense >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                    {totalIncome - totalExpense >= 0 ? "+" : ""}{fmt(Math.abs(totalIncome - totalExpense))}
+                  </span>
+                </div>
+                <div className="col-span-3 text-right">
+                  <span className={`text-sm font-bold ${((entries[entries.length - 1]?.running_balance) ?? 0) >= 0 ? "text-blue-300" : "text-red-400"}`}>
+                    {fmt((entries[entries.length - 1]?.running_balance) ?? 0)}
+                  </span>
+                  <p className="text-xs text-gray-600">saldo final</p>
+                </div>
               </div>
-              <div className="col-span-2 text-right">
-                <span className={`text-sm font-bold ${totalIncome - totalExpense >= 0 ? "text-emerald-400" : "text-red-400"}`}>
-                  {totalIncome - totalExpense >= 0 ? "+" : ""}{fmt(Math.abs(totalIncome - totalExpense))}
-                </span>
-              </div>
-              <div className="col-span-3 text-right">
-                <span className={`text-sm font-bold ${((entries[entries.length - 1]?.balance) ?? 0) >= 0 ? "text-blue-300" : "text-red-400"}`}>
-                  {fmt((entries[entries.length - 1]?.balance) ?? 0)}
-                </span>
-                <p className="text-xs text-gray-600">saldo final</p>
-              </div>
-            </div>
+            )}
           </div>
         </div>
       </div>
