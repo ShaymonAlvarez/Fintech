@@ -70,6 +70,11 @@ DEFAULT_CATEGORIES = [
 ]
 
 
+@app.get("/")
+def health_check():
+    return {"status": "ok", "app": "Finanças API"}
+
+
 @app.on_event("startup")
 def startup():
     Base.metadata.create_all(bind=engine)
