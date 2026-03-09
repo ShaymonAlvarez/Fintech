@@ -37,6 +37,7 @@ from auth import (
     create_access_token,
     get_current_user,
 )
+from config import CORS_ORIGINS
 
 # ==================== APP ====================
 
@@ -44,8 +45,8 @@ app = FastAPI(title="💰 Finanças API", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=CORS_ORIGINS,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )

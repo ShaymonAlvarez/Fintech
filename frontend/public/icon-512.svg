@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Finanças">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#4f46e5"/>
+      <stop offset="100%" stop-color="#8b5cf6"/>
+    </linearGradient>
+    <linearGradient id="shine" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="120" fill="#0a0a1a"/>
+  <rect x="52" y="52" width="408" height="408" rx="104" fill="url(#bg)"/>
+  <rect x="52" y="52" width="408" height="408" rx="104" fill="url(#shine)"/>
+  <g fill="none" stroke="#fff" stroke-width="26" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="136" y="150" width="240" height="182" rx="34"/>
+    <path d="M182 208h150" opacity="0.9"/>
+    <path d="M182 262h80" opacity="0.9"/>
+    <path d="M318 286c0 27.614-22.386 50-50 50s-50-22.386-50-50 22.386-50 50-50" opacity="0.95"/>
+  </g>
+</svg>
