@@ -10,6 +10,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Landmark,
+  Plus,
   Pencil,
   Check,
   X,
@@ -68,6 +69,16 @@ interface LoanScheduleItem {
   is_paid: boolean;
 }
 
+interface Transaction {
+  id: number;
+  amount: number;
+  type: string;
+  description: string;
+  payment_type: string;
+  card_id: number | null;
+  created_at: string;
+}
+
 interface CardMonthRow {
   month: number;
   label: string;
@@ -90,12 +101,29 @@ function getInstallmentForMonth(inst: CardInstallment, month: number, year: numb
   return 0;
 }
 
+function getInvoiceMonth(dateString: string, closingDay: number) {
+  const date = new Date(dateString);
+  let month = date.getMonth() + 1;
+  let year = date.getFullYear();
+
+  if (date.getDate() > closingDay) {
+    month += 1;
+    if (month > 12) {
+      month = 1;
+      year += 1;
+    }
+  }
+
+  return { month, year };
+}
+
 export default function CartoesPage() {
   const router = useRouter();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [cards, setCards] = useState<CardData[]>([]);
   const [installmentsByCard, setInstallmentsByCard] = useState<Record<number, CardInstallment[]>>({});
   const [subscriptionsByCard, setSubscriptionsByCard] = useState<Record<number, CardSubscription[]>>({});
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loans, setLoans] = useState<Loan[]>([]);
   const [loanSchedules, setLoanSchedules] = useState<Record<number, LoanScheduleItem[]>>({});
   const [viewYear, setViewYear] = useState(new Date().getFullYear());
@@ -103,6 +131,20 @@ export default function CartoesPage() {
   const [cardLimits, setCardLimits] = useState<Record<string, number>>({});
   const [editingLimitId, setEditingLimitId] = useState<number | null>(null);
   const [limitInput, setLimitInput] = useState("");
+  const [showCardModal, setShowCardModal] = useState(false);
+  const [showVariableModal, setShowVariableModal] = useState(false);
+  const [newBankName, setNewBankName] = useState("");
+  const [newCardName, setNewCardName] = useState("");
+  const [newClosingDay, setNewClosingDay] = useState("5");
+  const [newDueDay, setNewDueDay] = useState("12");
+  const [newCardColor, setNewCardColor] = useState("#7c3aed");
+  const [newCardIcon, setNewCardIcon] = useState("💳");
+  const [variableCardId, setVariableCardId] = useState("");
+  const [variableAmount, setVariableAmount] = useState("");
+  const [variableDescription, setVariableDescription] = useState("");
+  const [variableDate, setVariableDate] = useState(new Date().toISOString().slice(0, 10));
+  const [variableCategoryId, setVariableCategoryId] = useState("");
+  const [categories, setCategories] = useState<Array<{ id: number; name: string; icon: string }>>([]);
 
   useEffect(() => {
     const saved = localStorage.getItem("cards-credit-limits");
@@ -122,10 +164,12 @@ export default function CartoesPage() {
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const [cardsData, loansData, scheduleData] = await Promise.all([
+      const [cardsData, loansData, scheduleData, yearTransactions, categoriesData] = await Promise.all([
         api.get("/cards"),
         api.get("/loans"),
         api.get("/loans/schedule").catch(() => []),
+        api.get(`/transactions?year=${viewYear}&limit=2000`).catch(() => []),
+        api.get("/categories").catch(() => []),
       ]);
 
       const installmentMap: Record<number, CardInstallment[]> = {};
@@ -150,8 +194,10 @@ export default function CartoesPage() {
       setCards(cardsData);
       setInstallmentsByCard(installmentMap);
       setSubscriptionsByCard(subscriptionMap);
+      setTransactions(yearTransactions);
       setLoans(loansData);
       setLoanSchedules(scheduleMap);
+      setCategories(categoriesData);
     } catch (err: unknown) {
       const e = err as { status?: number };
       if (e.status === 401) {
@@ -160,7 +206,7 @@ export default function CartoesPage() {
       }
     }
     setLoading(false);
-  }, [router]);
+  }, [router, viewYear]);
 
   useEffect(() => {
     const token = localStorage.getItem("token");
@@ -178,11 +224,23 @@ export default function CartoesPage() {
       const installments = installmentsByCard[card.id] || [];
       const subscriptions = (subscriptionsByCard[card.id] || []).filter((item) => item.is_active);
       const monthlySubscription = subscriptions.reduce((sum, item) => sum + item.monthly_amount, 0);
+      const creditTransactions = transactions.filter(
+        (transaction) =>
+          transaction.type === "expense" &&
+          transaction.payment_type === "credit" &&
+          transaction.card_id === card.id
+      );
 
       rows[card.id] = Array.from({ length: 12 }, (_, index) => {
         const month = index + 1;
         const fatura = installments.reduce((sum, installment) => sum + getInstallmentForMonth(installment, month, viewYear), 0);
-        const variavel = 0;
+        const variavel = creditTransactions.reduce((sum, transaction) => {
+          const invoice = getInvoiceMonth(transaction.created_at, card.closing_day);
+          if (invoice.year === viewYear && invoice.month === month) {
+            return sum + transaction.amount;
+          }
+          return sum;
+        }, 0);
         const assinaturas = monthlySubscription;
         return {
           month,
@@ -277,6 +335,54 @@ export default function CartoesPage() {
     setLimitInput("");
   };
 
+  const handleCreateCard = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      await api.post("/cards", {
+        bank_name: newBankName,
+        card_name: newCardName,
+        closing_day: parseInt(newClosingDay, 10),
+        due_day: parseInt(newDueDay, 10),
+        color: newCardColor,
+        icon: newCardIcon || "💳",
+      });
+      setShowCardModal(false);
+      setNewBankName("");
+      setNewCardName("");
+      setNewClosingDay("5");
+      setNewDueDay("12");
+      setNewCardColor("#7c3aed");
+      setNewCardIcon("💳");
+      loadData();
+    } catch (error) {
+      console.error("Erro ao criar cartão:", error);
+    }
+  };
+
+  const handleCreateVariableExpense = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      await api.post("/transactions", {
+        amount: parseFloat(variableAmount),
+        type: "expense",
+        description: variableDescription,
+        category_id: variableCategoryId ? parseInt(variableCategoryId, 10) : null,
+        payment_type: "credit",
+        card_id: variableCardId ? parseInt(variableCardId, 10) : null,
+        created_at: `${variableDate}T12:00:00`,
+      });
+      setShowVariableModal(false);
+      setVariableCardId("");
+      setVariableAmount("");
+      setVariableDescription("");
+      setVariableDate(new Date().toISOString().slice(0, 10));
+      setVariableCategoryId("");
+      loadData();
+    } catch (error) {
+      console.error("Erro ao criar gasto variável do cartão:", error);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex h-screen bg-gray-950 text-gray-100 items-center justify-center">
@@ -305,7 +411,17 @@ export default function CartoesPage() {
             <h1 className="text-lg font-bold text-white">Cartões e dívidas</h1>
             <p className="text-xs text-gray-400">Visão anual consolidada e por cartão</p>
           </div>
-          <div className="ml-auto flex items-center gap-2 bg-gray-900 border border-gray-700 rounded-lg px-3 py-1.5">
+          <div className="ml-auto flex items-center gap-2 flex-wrap justify-end">
+            <button onClick={() => setShowVariableModal(true)} className="px-3 py-2 rounded-xl border border-white/10 text-gray-300 text-sm hover:bg-white/5 flex items-center gap-2">
+              <Plus className="w-4 h-4" />
+              Gasto variável
+            </button>
+            <button onClick={() => setShowCardModal(true)} className="px-3 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-sm flex items-center gap-2">
+              <Plus className="w-4 h-4" />
+              Banco / cartão
+            </button>
+          </div>
+          <div className="flex items-center gap-2 bg-gray-900 border border-gray-700 rounded-lg px-3 py-1.5">
             <button onClick={() => setViewYear((year) => year - 1)} className="text-gray-400 hover:text-white transition">
               <ChevronLeft className="w-4 h-4" />
             </button>
@@ -532,6 +648,64 @@ export default function CartoesPage() {
           )}
         </div>
       </div>
+
+      {showCardModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowCardModal(false)} />
+          <div className="relative bg-gray-900 border border-gray-800 rounded-2xl p-6 w-full max-w-md shadow-2xl">
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="text-lg font-semibold text-white">Novo banco / cartão</h3>
+              <button onClick={() => setShowCardModal(false)} className="p-1.5 rounded-lg hover:bg-white/5 text-gray-400 hover:text-white"><X className="w-5 h-5" /></button>
+            </div>
+            <form onSubmit={handleCreateCard} className="space-y-4">
+              <input type="text" value={newBankName} onChange={(e) => setNewBankName(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white" placeholder="Banco" required />
+              <input type="text" value={newCardName} onChange={(e) => setNewCardName(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white" placeholder="Nome do cartão" required />
+              <div className="grid grid-cols-2 gap-3">
+                <input type="number" min="1" max="31" value={newClosingDay} onChange={(e) => setNewClosingDay(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white" placeholder="Dia fechamento" required />
+                <input type="number" min="1" max="31" value={newDueDay} onChange={(e) => setNewDueDay(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white" placeholder="Dia vencimento" required />
+              </div>
+              <div className="grid grid-cols-[1fr,96px] gap-3 items-center">
+                <input type="color" value={newCardColor} onChange={(e) => setNewCardColor(e.target.value)} className="w-full h-12 rounded-xl bg-white/5 border border-white/10 p-2" />
+                <input type="text" maxLength={2} value={newCardIcon} onChange={(e) => setNewCardIcon(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white text-center" placeholder="💳" />
+              </div>
+              <button type="submit" className="w-full py-3 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-semibold">Salvar cartão</button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {showVariableModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowVariableModal(false)} />
+          <div className="relative bg-gray-900 border border-gray-800 rounded-2xl p-6 w-full max-w-md shadow-2xl">
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="text-lg font-semibold text-white">Novo gasto variável no cartão</h3>
+              <button onClick={() => setShowVariableModal(false)} className="p-1.5 rounded-lg hover:bg-white/5 text-gray-400 hover:text-white"><X className="w-5 h-5" /></button>
+            </div>
+            <form onSubmit={handleCreateVariableExpense} className="space-y-4">
+              <select value={variableCardId} onChange={(e) => setVariableCardId(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white" required>
+                <option value="" className="bg-gray-900">Selecionar cartão</option>
+                {cards.map((card) => (
+                  <option key={card.id} value={card.id} className="bg-gray-900">{card.icon} {card.bank_name} · {card.card_name}</option>
+                ))}
+              </select>
+              <input type="text" value={variableDescription} onChange={(e) => setVariableDescription(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white" placeholder="Descrição da compra" required />
+              <div className="grid grid-cols-2 gap-3">
+                <input type="number" step="0.01" min="0.01" value={variableAmount} onChange={(e) => setVariableAmount(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white" placeholder="Valor" required />
+                <input type="date" value={variableDate} onChange={(e) => setVariableDate(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white" required />
+              </div>
+              <select value={variableCategoryId} onChange={(e) => setVariableCategoryId(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white">
+                <option value="" className="bg-gray-900">Categoria opcional</option>
+                {categories.map((category) => (
+                  <option key={category.id} value={category.id} className="bg-gray-900">{category.icon} {category.name}</option>
+                ))}
+              </select>
+              <p className="text-xs text-gray-500">Gastos variáveis são compras no crédito que não viraram parcela e entram na próxima fatura conforme o dia de fechamento.</p>
+              <button type="submit" className="w-full py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold">Salvar gasto variável</button>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

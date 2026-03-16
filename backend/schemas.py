@@ -56,6 +56,8 @@ class TransactionCreate(BaseModel):
     type: str  # "income" ou "expense"
     description: str = ""
     category_id: Optional[int] = None
+    payment_type: str = "debit"
+    card_id: Optional[int] = None
     created_at: Optional[datetime] = None
 
 
@@ -65,6 +67,8 @@ class TransactionResponse(BaseModel):
     type: str
     description: str
     category_id: Optional[int]
+    payment_type: str
+    card_id: Optional[int]
     user_id: int
     created_at: datetime
     category: Optional[CategoryResponse] = None

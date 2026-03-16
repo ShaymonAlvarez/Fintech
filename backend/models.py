@@ -37,11 +37,14 @@ class Transaction(Base):
     type = Column(String, nullable=False)  # "income" ou "expense"
     description = Column(String, default="")
     category_id = Column(Integer, ForeignKey("categories.id"), nullable=True)
+    payment_type = Column(String, nullable=False, default="debit")
+    card_id = Column(Integer, ForeignKey("credit_card_accounts.id"), nullable=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     user = relationship("User", back_populates="transactions")
     category = relationship("Category", back_populates="transactions")
+    card = relationship("CreditCardAccount")
 
 
 class SalaryConfig(Base):

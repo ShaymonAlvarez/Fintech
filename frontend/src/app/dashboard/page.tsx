@@ -59,6 +59,8 @@ interface Transaction {
   amount: number;
   type: string;
   description: string;
+  payment_type: string;
+  card_id: number | null;
   created_at: string;
   category: {
     id: number;
@@ -344,6 +346,8 @@ export default function DashboardPage() {
   const [newType, setNewType] = useState("expense");
   const [newDescription, setNewDescription] = useState("");
   const [newCategoryId, setNewCategoryId] = useState("");
+  const [newPaymentType, setNewPaymentType] = useState("debit");
+  const [newCardId, setNewCardId] = useState("");
   const [newDate, setNewDate] = useState(ymd(new Date()));
 
   const [partnerDescription, setPartnerDescription] = useState("");
@@ -766,6 +770,8 @@ export default function DashboardPage() {
         type: newType,
         description: newDescription,
         category_id: newCategoryId ? parseInt(newCategoryId) : null,
+        payment_type: newType === "income" ? "debit" : newPaymentType,
+        card_id: newType === "expense" && newPaymentType === "credit" && newCardId ? parseInt(newCardId) : null,
         created_at: newDate ? `${newDate}T12:00:00` : null,
       });
       setShowAddModal(false);
@@ -773,6 +779,8 @@ export default function DashboardPage() {
       setNewDescription("");
       setNewCategoryId("");
       setNewType("expense");
+      setNewPaymentType("debit");
+      setNewCardId("");
       setNewDate(ymd(new Date()));
       loadData();
     } catch (error) {
@@ -1416,9 +1424,34 @@ export default function DashboardPage() {
                 <button type="button" onClick={() => setNewType("expense")} className={`flex-1 py-2.5 rounded-xl text-sm font-medium transition-all ${newType === "expense" ? "bg-rose-500/20 text-rose-400 border border-rose-500/30" : "bg-white/5 text-gray-400 border border-white/5 hover:bg-white/10"}`}>📤 Despesa</button>
                 <button type="button" onClick={() => setNewType("income")} className={`flex-1 py-2.5 rounded-xl text-sm font-medium transition-all ${newType === "income" ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30" : "bg-white/5 text-gray-400 border border-white/5 hover:bg-white/10"}`}>📥 Receita</button>
               </div>
+              {newType === "expense" && (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {[
+                    ["pix", "PIX"],
+                    ["debit", "Débito"],
+                    ["credit", "Crédito"],
+                    ["bank_transfer", "Transferência"],
+                  ].map(([value, label]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => setNewPaymentType(value)}
+                      className={`py-2 rounded-xl text-xs font-medium border transition ${newPaymentType === value ? "bg-blue-500/20 text-blue-300 border-blue-500/30" : "bg-white/5 text-gray-400 border-white/10 hover:bg-white/10"}`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              )}
               <input type="number" step="0.01" min="0.01" value={newAmount} onChange={(e) => setNewAmount(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white" placeholder="Valor" required />
               <input type="text" value={newDescription} onChange={(e) => setNewDescription(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white" placeholder="Descrição" />
               <input type="date" value={newDate} onChange={(e) => setNewDate(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white" />
+              {newType === "expense" && newPaymentType === "credit" && (
+                <select value={newCardId} onChange={(e) => setNewCardId(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white" required>
+                  <option value="" className="bg-[#1a1a2e]">Selecionar cartão da fatura</option>
+                  {cards.map((card) => <option key={card.id} value={card.id} className="bg-[#1a1a2e]">{card.icon} {card.bank_name} · {card.card_name}</option>)}
+                </select>
+              )}
               <select value={newCategoryId} onChange={(e) => setNewCategoryId(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white">
                 <option value="" className="bg-[#1a1a2e]">Selecionar categoria</option>
                 {categories.map((cat) => <option key={cat.id} value={cat.id} className="bg-[#1a1a2e]">{cat.icon} {cat.name}</option>)}

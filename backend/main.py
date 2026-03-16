@@ -2,7 +2,7 @@ import threading
 from fastapi import FastAPI, Depends, HTTPException, Query, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from sqlalchemy import extract
+from sqlalchemy import extract, inspect, text
 from datetime import datetime
 from typing import Optional, List
 
@@ -84,6 +84,16 @@ DEFAULT_CATEGORIES = [
 ]
 
 
+def _ensure_column_exists(table_name: str, column_name: str, column_sql: str):
+    inspector = inspect(engine)
+    existing_columns = {column["name"] for column in inspector.get_columns(table_name)}
+    if column_name in existing_columns:
+        return
+
+    with engine.begin() as connection:
+        connection.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_sql}"))
+
+
 @app.get("/")
 def health_check():
     return {"status": "ok", "app": "Finanças API"}
@@ -92,6 +102,8 @@ def health_check():
 @app.on_event("startup")
 async def startup():
     Base.metadata.create_all(bind=engine)
+    _ensure_column_exists("transactions", "payment_type", "payment_type VARCHAR DEFAULT 'debit'")
+    _ensure_column_exists("transactions", "card_id", "card_id INTEGER")
     db = SessionLocal()
     try:
         existing_names = {c.name for c in db.query(Category).all()}
@@ -256,11 +268,24 @@ def create_transaction(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    if data.payment_type == "credit" and not data.card_id:
+        raise HTTPException(status_code=400, detail="Selecione um cartão para gastos no crédito")
+
+    if data.payment_type == "credit" and data.card_id:
+        card = db.query(CreditCardAccount).filter(
+            CreditCardAccount.id == data.card_id,
+            CreditCardAccount.user_id == current_user.id,
+        ).first()
+        if not card:
+            raise HTTPException(status_code=404, detail="Cartão não encontrado")
+
     transaction = Transaction(
         amount=data.amount,
         type=data.type,
         description=data.description,
         category_id=data.category_id,
+        payment_type=data.payment_type,
+        card_id=data.card_id,
         user_id=current_user.id,
         created_at=data.created_at or datetime.utcnow(),
     )
