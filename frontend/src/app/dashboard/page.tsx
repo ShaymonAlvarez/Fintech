@@ -16,6 +16,9 @@ import {
   CreditCard,
   PiggyBank,
   Users,
+  Target,
+  Pencil,
+  Check,
 } from "lucide-react";
 import Sidebar from "@/components/Sidebar";
 import SalaryModal from "@/components/SalaryModal";
@@ -36,7 +39,7 @@ const MONTHS = [
   "Dezembro",
 ];
 
-type PanelKey = "summary" | "scenarios" | "vrva" | "partner" | "cards" | "daily";
+type PanelKey = "summary" | "scenarios" | "vrva" | "partner" | "cards" | "weekly" | "daily";
 
 interface Summary {
   total_income: number;
@@ -117,6 +120,20 @@ interface CardData {
   id: number;
   bank_name: string;
   card_name: string;
+  due_day: number;
+  closing_day: number;
+  color: string;
+  icon: string;
+}
+
+interface RecurringExpense {
+  id: number;
+  name: string;
+  amount: number;
+  due_day: number;
+  bank_name: string | null;
+  payment_type: string;
+  is_active: boolean;
 }
 
 interface CardInstallment {
@@ -144,6 +161,7 @@ interface Loan {
   bank_name: string | null;
   installment_amount: number;
   remaining_installments: number;
+  due_day: number;
 }
 
 interface PartnerExpense {
@@ -156,12 +174,47 @@ interface PartnerExpense {
   is_paid: boolean;
 }
 
-interface PlannerCardRow {
+interface FixedCommitmentRow {
+  id: string;
+  title: string;
+  dueDay: number;
+  amount: number;
+  kind: "recurring" | "installment" | "subscription" | "loan";
+  sourceAllocations: Record<string, number>;
+  note?: string;
+}
+
+interface PlannedDayEvent {
   id: string;
   title: string;
   amount: number;
   source: string;
+  tag: string;
 }
+
+interface PlannerDay extends DailyFlowItem {
+  planned_fixed_expenses: number;
+  total_expense: number;
+  net: number;
+  running_balance: number;
+  plannedEvents: PlannedDayEvent[];
+}
+
+interface WeekSummary {
+  label: string;
+  startDay: number;
+  endDay: number;
+  spent: number;
+  budget: number;
+  isCurrent: boolean;
+}
+
+const PAYMENT_TYPE_LABELS: Record<string, string> = {
+  pix: "PIX",
+  debit: "Débito",
+  credit: "Crédito",
+  bank_transfer: "Transferência",
+};
 
 function fmt(v: number) {
   return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -178,6 +231,48 @@ function ymd(date: Date) {
 
 function dayLabel(date: string) {
   return `${date.slice(8, 10)}/${date.slice(5, 7)}`;
+}
+
+function getDaysInMonth(year: number, month: number) {
+  return new Date(year, month, 0).getDate();
+}
+
+function getRecurringSourceLabel(expense: RecurringExpense) {
+  const paymentLabel = PAYMENT_TYPE_LABELS[expense.payment_type] || expense.payment_type;
+  if (expense.bank_name && ["pix", "debit"].includes(expense.payment_type)) {
+    return `${paymentLabel} ${expense.bank_name}`;
+  }
+  return expense.bank_name || paymentLabel;
+}
+
+function buildFourWeekTracker(entries: PlannerDay[], year: number, month: number, weeklyBudget: number): WeekSummary[] {
+  const totalDays = getDaysInMonth(year, month);
+  const baseSize = Math.floor(totalDays / 4);
+  const extraDays = totalDays % 4;
+  const today = new Date();
+  const isCurrentMonth = today.getFullYear() === year && today.getMonth() + 1 === month;
+
+  let cursor = 1;
+  return Array.from({ length: 4 }, (_, index) => {
+    const size = baseSize + (index < extraDays ? 1 : 0);
+    const startDay = cursor;
+    const endDay = index === 3 ? totalDays : Math.min(totalDays, cursor + size - 1);
+    cursor = endDay + 1;
+
+    const spent = entries
+      .slice(startDay - 1, endDay)
+      .filter((entry) => !entry.is_future)
+      .reduce((sum, entry) => sum + entry.variable_expenses, 0);
+
+    return {
+      label: `${String(startDay).padStart(2, "0")}/${String(month).padStart(2, "0")} – ${String(endDay).padStart(2, "0")}/${String(month).padStart(2, "0")}`,
+      startDay,
+      endDay,
+      spent,
+      budget: weeklyBudget,
+      isCurrent: isCurrentMonth && today.getDate() >= startDay && today.getDate() <= endDay,
+    };
+  });
 }
 
 function SectionShell({
@@ -226,10 +321,15 @@ export default function DashboardPage() {
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
   const [dailyFlow, setDailyFlow] = useState<DailyFlowItem[]>([]);
   const [cards, setCards] = useState<CardData[]>([]);
+  const [recurringExpenses, setRecurringExpenses] = useState<RecurringExpense[]>([]);
   const [installments, setInstallments] = useState<CardInstallment[]>([]);
   const [subscriptions, setSubscriptions] = useState<CardSubscription[]>([]);
   const [loans, setLoans] = useState<Loan[]>([]);
   const [partnerExpenses, setPartnerExpenses] = useState<PartnerExpense[]>([]);
+  const [weeklyBudget, setWeeklyBudget] = useState<number | null>(null);
+  const [weeklyMode, setWeeklyMode] = useState<"auto" | "manual">("auto");
+  const [editingWeeklyBudget, setEditingWeeklyBudget] = useState(false);
+  const [weeklyBudgetInput, setWeeklyBudgetInput] = useState("");
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
   const [showSalaryModal, setShowSalaryModal] = useState(false);
@@ -254,15 +354,27 @@ export default function DashboardPage() {
     vrva: true,
     partner: true,
     cards: true,
+    weekly: true,
     daily: true,
   });
   const [openDays, setOpenDays] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    const savedMode = localStorage.getItem("dashboard-weekly-tracker-mode");
+    if (savedMode === "manual" || savedMode === "auto") {
+      setWeeklyMode(savedMode);
+    }
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem("dashboard-weekly-tracker-mode", weeklyMode);
+  }, [weeklyMode]);
 
   const loadData = useCallback(async () => {
     setLoading(true);
 
     try {
-      const [s, c, t, cats, b, salaryCfg, scen, flow, cardList, loanList, partnerList] = await Promise.all([
+      const [s, c, t, cats, b, salaryCfg, scen, flow, recurringList, cardList, loanList, partnerList, weeklyBudgetData] = await Promise.all([
         api.get(`/reports/summary?month=${month}&year=${year}`),
         api.get(`/reports/by-category?month=${month}&year=${year}`),
         api.get(`/transactions?month=${month}&year=${year}&limit=500`),
@@ -271,9 +383,11 @@ export default function DashboardPage() {
         api.get("/salary/config").catch(() => null),
         api.get(`/scenarios?month=${month}&year=${year}`),
         api.get(`/daily-flow?month=${month}&year=${year}`),
+        api.get("/recurring").catch(() => []),
         api.get("/cards"),
         api.get("/loans"),
         api.get(`/partner-expenses?month=${month}&year=${year}`).catch(() => []),
+        api.get("/weekly-budget").catch(() => null),
       ]);
 
       let allInstallments: CardInstallment[] = [];
@@ -302,11 +416,14 @@ export default function DashboardPage() {
       setSalary(salaryCfg);
       setScenarios(scen);
       setDailyFlow(flow);
+      setRecurringExpenses(recurringList);
       setCards(cardList);
       setInstallments(allInstallments);
       setSubscriptions(allSubscriptions);
       setLoans(loanList);
       setPartnerExpenses(partnerList);
+      setWeeklyBudget(weeklyBudgetData?.amount ?? null);
+      setWeeklyBudgetInput(weeklyBudgetData?.amount ? String(weeklyBudgetData.amount * 4) : "");
       setOpenDays(
         Object.fromEntries(
           (flow as DailyFlowItem[]).map((day) => [day.date, day.is_today])
@@ -361,11 +478,7 @@ export default function DashboardPage() {
 
   const totalScenario = scenarios.reduce((sum, scenario) => sum + scenario.items.reduce((acc, item) => acc + item.estimated_amount, 0), 0);
   const salaryTotal = salary?.total_amount || 0;
-  const projectedBaseExpense = dailyFlow.reduce((sum, item) => sum + item.total_expense, 0);
   const openingBalance = dailyFlow.length > 0 ? dailyFlow[0].running_balance - dailyFlow[0].net : 0;
-  const projectedMonthClosing = dailyFlow.at(-1)?.running_balance || 0;
-  const projectedClosingWithScenarios = projectedMonthClosing - totalScenario;
-  const canStillSpend = salaryTotal + openingBalance - (projectedBaseExpense + totalScenario);
 
   const categoryRows = useMemo(() => {
     return categories
@@ -410,46 +523,175 @@ export default function DashboardPage() {
   const vrvaTotalBudget = vrvaRows.reduce((sum, row) => sum + row.budget, 0);
   const vrvaTotalActual = vrvaRows.reduce((sum, row) => sum + row.actual, 0);
 
-  const cardRows = useMemo(() => {
-    const rows: PlannerCardRow[] = [];
+  const fixedCommitmentRows = useMemo(() => {
+    const rows = new Map<string, FixedCommitmentRow>();
+
+    const upsertRow = (row: FixedCommitmentRow, source: string, amount: number) => {
+      const existing = rows.get(row.id);
+      if (existing) {
+        existing.amount += amount;
+        existing.sourceAllocations[source] = (existing.sourceAllocations[source] || 0) + amount;
+        return;
+      }
+
+      rows.set(row.id, {
+        ...row,
+        amount,
+        sourceAllocations: { [source]: amount },
+      });
+    };
+
+    recurringExpenses
+      .filter((expense) => expense.is_active)
+      .forEach((expense) => {
+        const source = getRecurringSourceLabel(expense);
+        upsertRow(
+          {
+            id: `rec-${expense.id}`,
+            title: expense.name,
+            dueDay: expense.due_day,
+            amount: 0,
+            kind: "recurring",
+            sourceAllocations: {},
+            note: "Previsto • Fixo",
+          },
+          source,
+          expense.amount
+        );
+      });
 
     installments.forEach((installment) => {
       const diff = monthDiff(installment.start_date, year, month);
       if (diff >= 0 && diff < installment.remaining_installments) {
         const card = cards.find((item) => item.id === installment.card_id);
-        rows.push({
-          id: `inst-${installment.id}`,
-          title: `${installment.description} ${installment.paid_installments + diff + 1}/${installment.total_installments}`,
-          amount: installment.monthly_amount,
-          source: card ? `${card.bank_name} ${card.card_name}` : "Cartão",
-        });
+        const source = card?.bank_name || card?.card_name || "Cartão";
+        upsertRow(
+          {
+            id: `inst-${installment.id}`,
+            title: `${installment.description} ${installment.paid_installments + diff + 1}/${installment.total_installments}`,
+            dueDay: card?.due_day || new Date(installment.start_date).getDate(),
+            amount: 0,
+            kind: "installment",
+            sourceAllocations: {},
+            note: card ? `${card.icon} ${card.card_name}` : "Parcela no cartão",
+          },
+          source,
+          installment.monthly_amount
+        );
       }
     });
 
-    subscriptions.filter((subscription) => subscription.is_active).forEach((subscription) => {
-      const card = cards.find((item) => item.id === subscription.card_id);
-      rows.push({
-        id: `sub-${subscription.id}`,
-        title: subscription.description,
-        amount: subscription.monthly_amount,
-        source: card ? `${card.bank_name} ${card.card_name}` : "Cartão",
+    subscriptions
+      .filter((subscription) => subscription.is_active)
+      .forEach((subscription) => {
+        const card = cards.find((item) => item.id === subscription.card_id);
+        const source = card?.bank_name || card?.card_name || "Cartão";
+        upsertRow(
+          {
+            id: `sub-${subscription.id}`,
+            title: subscription.description,
+            dueDay: card?.due_day || 1,
+            amount: 0,
+            kind: "subscription",
+            sourceAllocations: {},
+            note: card ? `${card.icon} ${card.card_name}` : "Assinatura no cartão",
+          },
+          source,
+          subscription.monthly_amount
+        );
       });
-    });
 
     loans.forEach((loan) => {
-      rows.push({
-        id: `loan-${loan.id}`,
-        title: `${loan.name}${loan.remaining_installments > 0 ? ` (${loan.remaining_installments} restantes)` : ""}`,
-        amount: loan.installment_amount,
-        source: loan.bank_name || "Empréstimo",
-      });
+      upsertRow(
+        {
+          id: `loan-${loan.id}`,
+          title: `${loan.name}${loan.remaining_installments > 0 ? ` (${loan.remaining_installments} restantes)` : ""}`,
+          dueDay: loan.due_day,
+          amount: 0,
+          kind: "loan",
+          sourceAllocations: {},
+          note: "Previsto • Parcela fixa",
+        },
+        loan.bank_name || "Empréstimo",
+        loan.installment_amount
+      );
     });
 
-    return rows.sort((a, b) => b.amount - a.amount);
-  }, [installments, subscriptions, loans, cards, year, month]);
+    return Array.from(rows.values()).sort((a, b) => a.dueDay - b.dueDay || b.amount - a.amount);
+  }, [recurringExpenses, installments, subscriptions, loans, cards, year, month]);
+
+  const commitmentSources = useMemo(() => {
+    const totals = new Map<string, number>();
+    fixedCommitmentRows.forEach((row) => {
+      Object.entries(row.sourceAllocations).forEach(([source, amount]) => {
+        totals.set(source, (totals.get(source) || 0) + amount);
+      });
+    });
+    return Array.from(totals.entries())
+      .sort((a, b) => b[1] - a[1])
+      .map(([source]) => source);
+  }, [fixedCommitmentRows]);
+
+  const plannedEventsByDate = useMemo(() => {
+    const map = new Map<string, PlannedDayEvent[]>();
+    const daysInMonth = getDaysInMonth(year, month);
+
+    fixedCommitmentRows.forEach((row) => {
+      const safeDay = Math.min(row.dueDay, daysInMonth);
+      const date = `${year}-${String(month).padStart(2, "0")}-${String(safeDay).padStart(2, "0")}`;
+      const sourceText = Object.entries(row.sourceAllocations)
+        .map(([source, amount]) => `${source}: ${fmt(amount)}`)
+        .join(" • ");
+      const current = map.get(date) || [];
+      current.push({
+        id: row.id,
+        title: row.title,
+        amount: row.amount,
+        source: sourceText,
+        tag: row.note || "Previsto • Fixo",
+      });
+      map.set(date, current);
+    });
+
+    return map;
+  }, [fixedCommitmentRows, year, month]);
+
+  const plannerDays = useMemo(() => {
+    let runningBalance = openingBalance;
+    return dailyFlow.map((day) => {
+      const plannedEvents = plannedEventsByDate.get(day.date) || [];
+      const plannedFixed = plannedEvents.reduce((sum, event) => sum + event.amount, 0);
+      const totalExpense = plannedFixed + day.variable_expenses;
+      const net = day.income - totalExpense;
+      runningBalance += net;
+
+      return {
+        ...day,
+        planned_fixed_expenses: plannedFixed,
+        total_expense: totalExpense,
+        net,
+        running_balance: runningBalance,
+        plannedEvents,
+      } satisfies PlannerDay;
+    });
+  }, [dailyFlow, plannedEventsByDate, openingBalance]);
+
+  const totalProjectedIncome = plannerDays.reduce((sum, day) => sum + day.income, 0);
+  const totalFixedPlanned = fixedCommitmentRows.reduce((sum, row) => sum + row.amount, 0);
+  const totalVariableSpent = plannerDays.reduce((sum, day) => sum + day.variable_expenses, 0);
+  const projectedBaseExpense = totalFixedPlanned + totalVariableSpent;
+  const projectedMonthClosing = plannerDays.at(-1)?.running_balance || openingBalance;
+  const projectedClosingWithScenarios = projectedMonthClosing - totalScenario;
+  const canStillSpend = openingBalance + totalProjectedIncome - (projectedBaseExpense + totalScenario);
+  const autoWeeklyBudgetBase = Math.max(openingBalance + totalProjectedIncome - totalFixedPlanned - totalScenario, 0);
+  const effectiveWeeklyBudget = weeklyMode === "manual" && weeklyBudget ? weeklyBudget : autoWeeklyBudgetBase / 4;
+  const weeklySummaries = useMemo(
+    () => buildFourWeekTracker(plannerDays, year, month, effectiveWeeklyBudget),
+    [plannerDays, year, month, effectiveWeeklyBudget]
+  );
 
   const allPanelsExpanded = Object.values(panelOpen).every(Boolean);
-  const allDaysExpanded = dailyFlow.length > 0 && dailyFlow.every((day) => openDays[day.date]);
+  const allDaysExpanded = plannerDays.length > 0 && plannerDays.every((day) => openDays[day.date]);
 
   const togglePanel = (panel: PanelKey) => {
     setPanelOpen((current) => ({ ...current, [panel]: !current[panel] }));
@@ -463,6 +705,7 @@ export default function DashboardPage() {
       vrva: next,
       partner: next,
       cards: next,
+      weekly: next,
       daily: next,
     });
   };
@@ -473,7 +716,7 @@ export default function DashboardPage() {
 
   const toggleAllDays = () => {
     const next = !allDaysExpanded;
-    setOpenDays(Object.fromEntries(dailyFlow.map((day) => [day.date, next])));
+    setOpenDays(Object.fromEntries(plannerDays.map((day) => [day.date, next])));
   };
 
   const handleDeleteTransaction = async (id: number) => {
@@ -540,6 +783,26 @@ export default function DashboardPage() {
     } catch (error) {
       console.error("Erro ao adicionar lançamento da esposa:", error);
     }
+  };
+
+  const saveWeeklyBudget = async () => {
+    const monthlyBase = parseFloat(weeklyBudgetInput.replace(",", "."));
+    if (Number.isNaN(monthlyBase) || monthlyBase <= 0) {
+      setEditingWeeklyBudget(false);
+      return;
+    }
+
+    const perWeek = monthlyBase / 4;
+    setWeeklyBudget(perWeek);
+    setWeeklyMode("manual");
+
+    try {
+      await api.post("/weekly-budget", { amount: perWeek });
+    } catch (error) {
+      console.error("Erro ao salvar tracker semanal:", error);
+    }
+
+    setEditingWeeklyBudget(false);
   };
 
   const prevMonth = () => {
@@ -625,9 +888,6 @@ export default function DashboardPage() {
                 onToggle={() => togglePanel("summary")}
                 className="border border-red-500/20 bg-gradient-to-br from-[#5f0c05] via-[#4b0904] to-[#360603]"
               >
-                <div className="px-4 sm:px-6 py-4 border-t border-white/10 text-center bg-cyan-500/20">
-                  <h1 className="text-xl sm:text-2xl font-bold text-cyan-100">{MONTHS[month - 1].toLowerCase()} - {year}</h1>
-                </div>
                 <div className="grid grid-cols-1 md:grid-cols-5 border-t border-white/10 text-sm">
                   <div className="px-4 py-3 text-zinc-100 border-r border-white/10 md:col-span-2">Gasto por mês previsto / já comprometido:</div>
                   <div className="px-4 py-3 font-semibold text-white border-r border-white/10">{fmt(projectedBaseExpense)} / {fmt(projectedBaseExpense + totalScenario)}</div>
@@ -642,7 +902,7 @@ export default function DashboardPage() {
                     <div className="mt-4 space-y-2 text-sm text-amber-100/80">
                       <p>Saldo de entrada: {fmt(openingBalance)}</p>
                       <p>Saldo projetado: {fmt(projectedClosingWithScenarios)}</p>
-                      <p>Referência atual: {fmt(summary?.balance || 0)}</p>
+                      <p>Pool semanal automático: {fmt(autoWeeklyBudgetBase)}</p>
                     </div>
                   </div>
                   <div className="overflow-x-auto border-r border-white/10">
@@ -669,10 +929,11 @@ export default function DashboardPage() {
                   </div>
                   <div className="p-4 sm:p-6 bg-[#4d0c06]/60">
                     <div className="space-y-3 text-sm text-amber-50">
-                      <div className="flex justify-between"><span>Receitas do mês</span><span className="font-semibold">{fmt(summary?.total_income || 0)}</span></div>
-                      <div className="flex justify-between"><span>Despesas realizadas</span><span className="font-semibold">{fmt(summary?.total_expense || 0)}</span></div>
+                      <div className="flex justify-between"><span>Receitas do mês</span><span className="font-semibold">{fmt(totalProjectedIncome)}</span></div>
+                      <div className="flex justify-between"><span>Fixos previstos</span><span className="font-semibold">{fmt(totalFixedPlanned)}</span></div>
+                      <div className="flex justify-between"><span>Variáveis realizados</span><span className="font-semibold">{fmt(totalVariableSpent)}</span></div>
                       <div className="flex justify-between"><span>Planejado em cenários</span><span className="font-semibold">{fmt(totalScenario)}</span></div>
-                      <div className="flex justify-between"><span>Saldo no mês</span><span className={`font-semibold ${(summary?.balance || 0) >= 0 ? "text-emerald-300" : "text-red-300"}`}>{fmt(summary?.balance || 0)}</span></div>
+                      <div className="flex justify-between"><span>Saldo atual real</span><span className={`font-semibold ${(summary?.balance || 0) >= 0 ? "text-emerald-300" : "text-red-300"}`}>{fmt(summary?.balance || 0)}</span></div>
                       <div className="flex justify-between"><span>Saldo futuro previsto</span><span className={`font-semibold ${projectedClosingWithScenarios >= 0 ? "text-emerald-300" : "text-red-300"}`}>{fmt(projectedClosingWithScenarios)}</span></div>
                     </div>
                   </div>
@@ -797,29 +1058,147 @@ export default function DashboardPage() {
                 onToggle={() => togglePanel("cards")}
                 className="bg-[#1f2125] border border-white/10"
               >
+                <div className="px-4 sm:px-6 py-4 border-b border-white/10 bg-[#102b33] text-xs sm:text-sm text-cyan-100 flex flex-wrap gap-3">
+                  <span>Total fixo do mês: <strong>{fmt(totalFixedPlanned)}</strong></span>
+                  {commitmentSources.map((source) => (
+                    <span key={source} className="text-cyan-100/80">{source}: <strong>{fmt(fixedCommitmentRows.reduce((sum, row) => sum + (row.sourceAllocations[source] || 0), 0))}</strong></span>
+                  ))}
+                </div>
                 <div className="overflow-x-auto">
-                  <table className="w-full text-sm min-w-[520px]">
-                    <thead className="bg-white/[0.04] text-gray-300">
+                  <table className="w-full text-sm min-w-[980px]">
+                    <thead className="bg-[#123640] text-cyan-50">
                       <tr>
-                        <th className="px-4 py-3 text-left">Descrição</th>
+                        <th className="px-4 py-3 text-left">Serviço</th>
+                        <th className="px-4 py-3 text-center">Dia</th>
                         <th className="px-4 py-3 text-right">Valor</th>
-                        <th className="px-4 py-3 text-left">Origem</th>
+                        {commitmentSources.map((source) => (
+                          <th key={source} className="px-4 py-3 text-right whitespace-nowrap">{source}</th>
+                        ))}
                       </tr>
                     </thead>
                     <tbody>
-                      {cardRows.length === 0 ? (
-                        <tr><td className="px-4 py-6 text-gray-400" colSpan={3}>Nenhum lançamento de cartão ou empréstimo neste mês.</td></tr>
+                      {fixedCommitmentRows.length === 0 ? (
+                        <tr><td className="px-4 py-6 text-gray-400" colSpan={3 + commitmentSources.length}>Nenhum compromisso fixo detectado neste mês.</td></tr>
                       ) : (
-                        cardRows.map((row) => (
-                          <tr key={row.id} className="border-t border-white/5 text-gray-200">
-                            <td className="px-4 py-3">{row.title}</td>
-                            <td className="px-4 py-3 text-right">{fmt(row.amount)}</td>
-                            <td className="px-4 py-3 text-gray-400">{row.source}</td>
+                        fixedCommitmentRows.map((row) => (
+                          <tr key={row.id} className="border-t border-[#1c4650] text-cyan-50/95 bg-[#12323a] even:bg-[#133941]">
+                            <td className="px-4 py-3">
+                              <div className="font-medium">{row.title}</div>
+                              {row.note ? <div className="text-xs text-cyan-100/60 mt-1">{row.note}</div> : null}
+                            </td>
+                            <td className="px-4 py-3 text-center font-semibold">{row.dueDay}</td>
+                            <td className="px-4 py-3 text-right font-semibold">{fmt(row.amount)}</td>
+                            {commitmentSources.map((source) => (
+                              <td key={`${row.id}-${source}`} className="px-4 py-3 text-right text-cyan-100/90">
+                                {row.sourceAllocations[source] ? fmt(row.sourceAllocations[source]) : ""}
+                              </td>
+                            ))}
                           </tr>
                         ))
                       )}
                     </tbody>
+                    {fixedCommitmentRows.length > 0 && (
+                      <tfoot>
+                        <tr className="bg-[#0d242a] text-cyan-50 font-semibold border-t border-[#28525d]">
+                          <td className="px-4 py-3">Total de gastos fixos</td>
+                          <td className="px-4 py-3 text-center">—</td>
+                          <td className="px-4 py-3 text-right">{fmt(totalFixedPlanned)}</td>
+                          {commitmentSources.map((source) => (
+                            <td key={`total-${source}`} className="px-4 py-3 text-right">
+                              {fmt(fixedCommitmentRows.reduce((sum, row) => sum + (row.sourceAllocations[source] || 0), 0))}
+                            </td>
+                          ))}
+                        </tr>
+                      </tfoot>
+                    )}
                   </table>
+                </div>
+              </SectionShell>
+
+              <SectionShell
+                title="Tracker semanal de gastos variáveis"
+                icon={<Target className="w-5 h-5 text-blue-400" />}
+                open={panelOpen.weekly}
+                onToggle={() => togglePanel("weekly")}
+                className="bg-[#171b2a] border border-white/10"
+                actions={
+                  <div className="flex items-center gap-2 flex-wrap justify-end">
+                    <button
+                      onClick={() => setWeeklyMode("auto")}
+                      className={`px-3 py-2 rounded-xl text-sm border ${weeklyMode === "auto" ? "border-blue-500/50 bg-blue-500/10 text-blue-300" : "border-white/10 text-gray-400 hover:bg-white/5"}`}
+                    >
+                      Automático
+                    </button>
+                    {editingWeeklyBudget ? (
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="number"
+                          value={weeklyBudgetInput}
+                          onChange={(e) => setWeeklyBudgetInput(e.target.value)}
+                          className="w-32 px-3 py-2 rounded-xl bg-white/5 border border-white/10 text-white text-sm"
+                          placeholder="Base mensal"
+                          onKeyDown={(e) => e.key === "Enter" && saveWeeklyBudget()}
+                          autoFocus
+                        />
+                        <button onClick={saveWeeklyBudget} className="p-2 rounded-xl bg-emerald-600 text-white hover:bg-emerald-500"><Check className="w-4 h-4" /></button>
+                        <button onClick={() => setEditingWeeklyBudget(false)} className="p-2 rounded-xl bg-white/10 text-white hover:bg-white/15"><X className="w-4 h-4" /></button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => {
+                          setWeeklyMode("manual");
+                          setWeeklyBudgetInput(String((weeklyBudget || effectiveWeeklyBudget) * 4));
+                          setEditingWeeklyBudget(true);
+                        }}
+                        className="px-3 py-2 rounded-xl border border-white/10 text-gray-300 text-sm hover:bg-white/5 flex items-center gap-2"
+                      >
+                        <Pencil className="w-4 h-4" />
+                        Base manual mensal
+                      </button>
+                    )}
+                  </div>
+                }
+              >
+                <div className="px-4 sm:px-6 py-4 grid grid-cols-1 md:grid-cols-3 gap-4 border-b border-white/10 bg-white/[0.03]">
+                  <div className="rounded-2xl border border-white/5 bg-white/[0.02] p-4">
+                    <p className="text-xs text-gray-500">Modo atual</p>
+                    <p className="text-lg font-semibold text-white mt-1">{weeklyMode === "manual" ? "Manual" : "Automático"}</p>
+                    <p className="text-xs text-gray-400 mt-2">{weeklyMode === "manual" ? `Base mensal manual: ${fmt((weeklyBudget || 0) * 4)}` : `Base automática: ${fmt(autoWeeklyBudgetBase)}`}</p>
+                  </div>
+                  <div className="rounded-2xl border border-white/5 bg-white/[0.02] p-4">
+                    <p className="text-xs text-gray-500">Teto por semana</p>
+                    <p className="text-lg font-semibold text-blue-300 mt-1">{fmt(effectiveWeeklyBudget)}</p>
+                    <p className="text-xs text-gray-400 mt-2">Só conta gasto variável real. Os itens com tag previsto/fixo ficam fora do tracker.</p>
+                  </div>
+                  <div className="rounded-2xl border border-white/5 bg-white/[0.02] p-4">
+                    <p className="text-xs text-gray-500">Sobra mensal após fixos</p>
+                    <p className={`text-lg font-semibold mt-1 ${autoWeeklyBudgetBase >= 0 ? "text-emerald-300" : "text-red-300"}`}>{fmt(autoWeeklyBudgetBase)}</p>
+                    <p className="text-xs text-gray-400 mt-2">Cálculo: entradas do mês - fixos previstos - cenários declarados.</p>
+                  </div>
+                </div>
+                <div className="p-4 sm:p-6 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+                  {weeklySummaries.map((week, index) => {
+                    const percentage = week.budget > 0 ? Math.min((week.spent / week.budget) * 100, 100) : 0;
+                    const overBudget = week.spent > week.budget;
+                    return (
+                      <div key={week.label} className={`rounded-2xl border p-4 ${week.isCurrent ? "border-blue-500/40 bg-blue-500/10" : "border-white/10 bg-white/[0.02]"}`}>
+                        <div className="flex items-center justify-between gap-2 mb-3">
+                          <div>
+                            <p className="text-sm font-semibold text-white">Semana {index + 1}</p>
+                            <p className="text-xs text-gray-500">{week.label}</p>
+                          </div>
+                          {week.isCurrent ? <span className="text-xs px-2 py-1 rounded-full bg-blue-500 text-white">Atual</span> : null}
+                        </div>
+                        <div className="h-2 rounded-full bg-white/10 overflow-hidden mb-3">
+                          <div className={`h-full rounded-full ${overBudget ? "bg-red-500" : percentage > 80 ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${percentage}%` }} />
+                        </div>
+                        <div className="space-y-1">
+                          <p className="text-sm text-gray-300">{fmt(week.spent)} gastos de {fmt(week.budget)}</p>
+                          <p className={`text-xs font-medium ${overBudget ? "text-red-400" : "text-gray-400"}`}>{overBudget ? `${fmt(week.spent - week.budget)} acima do teto` : `${fmt(week.budget - week.spent)} restantes`}</p>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </SectionShell>
 
@@ -836,16 +1215,20 @@ export default function DashboardPage() {
               >
                 <div className="px-4 sm:px-6 py-4 grid grid-cols-2 lg:grid-cols-5 gap-4 border-b border-white/10 bg-white/[0.03]">
                   <div><p className="text-xs text-gray-500">Saldo de entrada</p><p className="text-lg font-semibold text-white">{fmt(openingBalance)}</p></div>
-                  <div><p className="text-xs text-gray-500">Renda do mês</p><p className="text-lg font-semibold text-emerald-400">{fmt(summary?.total_income || 0)}</p></div>
-                  <div><p className="text-xs text-gray-500">Saída do mês</p><p className="text-lg font-semibold text-red-400">{fmt(summary?.total_expense || 0)}</p></div>
-                  <div><p className="text-xs text-gray-500">Projeção base</p><p className="text-lg font-semibold text-amber-400">{fmt(projectedBaseExpense)}</p></div>
+                  <div><p className="text-xs text-gray-500">Entradas do mês</p><p className="text-lg font-semibold text-emerald-400">{fmt(totalProjectedIncome)}</p></div>
+                  <div><p className="text-xs text-gray-500">Fixos previstos</p><p className="text-lg font-semibold text-red-300">{fmt(totalFixedPlanned)}</p></div>
+                  <div><p className="text-xs text-gray-500">Variáveis reais</p><p className="text-lg font-semibold text-red-400">{fmt(totalVariableSpent)}</p></div>
                   <div><p className="text-xs text-gray-500">Saldo futuro</p><p className={`text-lg font-semibold ${projectedClosingWithScenarios >= 0 ? "text-blue-300" : "text-red-400"}`}>{fmt(projectedClosingWithScenarios)}</p></div>
                 </div>
                 <div className="divide-y divide-white/5">
-                  {dailyFlow.map((day) => {
+                  {plannerDays.map((day) => {
                     const dayTransactions = transactionsByDay.get(day.date) || [];
                     const expanded = !!openDays[day.date];
                     const dayNumber = Number(day.date.slice(8, 10));
+                    const dayHighlights = [
+                      ...day.plannedEvents.map((event) => `📌 ${event.title}`),
+                      ...dayTransactions.map((transaction) => `${transaction.type === "income" ? "📥" : "📤"} ${transaction.description || transaction.category?.name || "Sem descrição"}`),
+                    ];
                     return (
                       <div key={day.date} className={`${day.is_today ? "bg-blue-500/10" : ""}`}>
                         <button onClick={() => toggleDay(day.date)} className="w-full px-4 sm:px-6 py-4 text-left hover:bg-white/[0.02] transition">
@@ -859,10 +1242,10 @@ export default function DashboardPage() {
                               {expanded ? <ChevronUp className="w-4 h-4 text-gray-500" /> : <ChevronDown className="w-4 h-4 text-gray-500" />}
                             </div>
                             <div className="flex flex-wrap gap-2">
-                              {day.events.slice(0, expanded ? day.events.length : 2).map((event, index) => (
+                              {dayHighlights.slice(0, expanded ? dayHighlights.length : 2).map((event, index) => (
                                 <span key={`${day.date}-${index}`} className="text-xs text-gray-300 bg-white/[0.04] border border-white/5 rounded-full px-3 py-1">{event}</span>
                               ))}
-                              {!expanded && day.events.length > 2 && <span className="text-xs text-gray-500">+{day.events.length - 2} eventos</span>}
+                              {!expanded && dayHighlights.length > 2 && <span className="text-xs text-gray-500">+{dayHighlights.length - 2} eventos</span>}
                             </div>
                             <div className="text-left md:text-right">
                               <p className={`text-sm font-semibold ${day.running_balance >= 0 ? "text-blue-300" : "text-red-400"}`}>{fmt(day.running_balance)}</p>
@@ -875,14 +1258,23 @@ export default function DashboardPage() {
                           <div className="px-4 sm:px-6 pb-4">
                             <div className="grid grid-cols-1 lg:grid-cols-[1fr,220px] gap-4">
                               <div className="space-y-2">
-                                {day.events.map((event, index) => (
-                                  <div key={`${day.date}-full-${index}`} className="text-sm text-gray-300 bg-white/[0.03] border border-white/5 rounded-xl px-3 py-2">{event}</div>
+                                {day.plannedEvents.map((event) => (
+                                  <div key={event.id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl px-3 py-3 bg-cyan-500/[0.08] border border-cyan-500/20">
+                                    <div className="min-w-0">
+                                      <div className="flex items-center gap-2 flex-wrap">
+                                        <p className="text-sm text-white break-words">📌 {event.title}</p>
+                                        <span className="text-[10px] uppercase tracking-wide px-2 py-1 rounded-full bg-cyan-500/20 text-cyan-200">{event.tag}</span>
+                                      </div>
+                                      <p className="text-xs text-cyan-100/70">{event.source}</p>
+                                    </div>
+                                    <span className="text-sm font-semibold text-red-300">-{fmt(event.amount)}</span>
+                                  </div>
                                 ))}
                                 {dayTransactions.map((transaction) => (
                                   <div key={transaction.id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl px-3 py-3 bg-white/[0.02] border border-white/5">
                                     <div className="min-w-0">
                                       <p className="text-sm text-white break-words">{transaction.category?.icon || "📦"} {transaction.description || transaction.category?.name || "Sem descrição"}</p>
-                                      <p className="text-xs text-gray-500">{transaction.category?.name || "Sem categoria"}</p>
+                                      <p className="text-xs text-gray-500">{transaction.category?.name || "Sem categoria"} • Real</p>
                                     </div>
                                     <div className="flex items-center gap-3 justify-between sm:justify-end">
                                       <span className={`text-sm font-semibold ${transaction.type === "income" ? "text-emerald-400" : "text-red-400"}`}>{transaction.type === "income" ? "+" : "-"}{fmt(transaction.amount)}</span>
@@ -890,11 +1282,11 @@ export default function DashboardPage() {
                                     </div>
                                   </div>
                                 ))}
-                                {day.events.length === 0 && dayTransactions.length === 0 && <div className="text-sm text-gray-600">Sem lançamentos neste dia.</div>}
+                                {day.plannedEvents.length === 0 && dayTransactions.length === 0 && <div className="text-sm text-gray-600">Sem lançamentos neste dia.</div>}
                               </div>
                               <div className="rounded-2xl bg-white/[0.03] border border-white/5 p-4 space-y-2 h-fit">
                                 <div className="flex justify-between text-sm"><span className="text-gray-500">Entradas</span><span className="text-emerald-400 font-medium">{fmt(day.income)}</span></div>
-                                <div className="flex justify-between text-sm"><span className="text-gray-500">Recorrentes</span><span className="text-red-300 font-medium">{fmt(day.recurring_expenses)}</span></div>
+                                <div className="flex justify-between text-sm"><span className="text-gray-500">Previstos / fixos</span><span className="text-red-300 font-medium">{fmt(day.planned_fixed_expenses)}</span></div>
                                 <div className="flex justify-between text-sm"><span className="text-gray-500">Variáveis</span><span className="text-red-400 font-medium">{fmt(day.variable_expenses)}</span></div>
                                 <div className="flex justify-between text-sm border-t border-white/5 pt-2"><span className="text-gray-400">Saldo do dia</span><span className={`font-semibold ${day.net >= 0 ? "text-emerald-400" : "text-red-400"}`}>{day.net >= 0 ? "+" : "-"}{fmt(Math.abs(day.net))}</span></div>
                                 <div className="flex justify-between text-sm"><span className="text-gray-400">Saldo acumulado</span><span className={`font-semibold ${day.running_balance >= 0 ? "text-blue-300" : "text-red-400"}`}>{fmt(day.running_balance)}</span></div>
