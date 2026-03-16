@@ -21,6 +21,11 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 dias
 # CORS
 CORS_ORIGINS = _split_env_list(os.getenv("CORS_ORIGINS", ""))
 FRONTEND_URL = os.getenv("FRONTEND_URL", "").strip()
+RAILWAY_PUBLIC_DOMAIN = os.getenv("RAILWAY_PUBLIC_DOMAIN", "").strip()
+BACKEND_PUBLIC_URL = os.getenv("BACKEND_PUBLIC_URL", "").strip()
+
+if not BACKEND_PUBLIC_URL and RAILWAY_PUBLIC_DOMAIN:
+    BACKEND_PUBLIC_URL = f"https://{RAILWAY_PUBLIC_DOMAIN}"
 
 if FRONTEND_URL and FRONTEND_URL not in CORS_ORIGINS:
     CORS_ORIGINS.append(FRONTEND_URL)
@@ -35,6 +40,7 @@ for default_origin in [
 
 # Telegram
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
 ALLOWED_TELEGRAM_IDS = [
     int(x.strip())
     for x in os.getenv("ALLOWED_TELEGRAM_IDS", "").split(",")

@@ -13,6 +13,7 @@ Uso:
 
 import re
 from datetime import datetime
+from typing import Optional
 
 from telegram import Update, BotCommand
 from telegram.ext import (
@@ -74,6 +75,8 @@ MONTHS_PT = [
     "", "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
     "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro",
 ]
+
+telegram_app: Optional[Application] = None
 
 
 # ==================== HELPERS ====================
@@ -384,6 +387,58 @@ async def post_init(application):
     ])
 
 
+def build_application() -> Application:
+    application = Application.builder().token(TELEGRAM_BOT_TOKEN).post_init(post_init).build()
+
+    application.add_handler(CommandHandler("start", cmd_start))
+    application.add_handler(CommandHandler("ajuda", cmd_ajuda))
+    application.add_handler(CommandHandler("resumo", cmd_resumo))
+    application.add_handler(CommandHandler("saldo", cmd_saldo))
+    application.add_handler(CommandHandler("categorias", cmd_categorias))
+    application.add_handler(CommandHandler("ultimas", cmd_ultimas))
+    application.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_transaction)
+    )
+    return application
+
+
+async def get_or_create_application() -> Application:
+    global telegram_app
+
+    if telegram_app is None:
+        telegram_app = build_application()
+        await telegram_app.initialize()
+        await telegram_app.start()
+        await post_init(telegram_app)
+
+    return telegram_app
+
+
+async def setup_webhook(webhook_url: str, secret_token: str | None = None):
+    application = await get_or_create_application()
+    await application.bot.delete_webhook(drop_pending_updates=True)
+    await application.bot.set_webhook(
+        url=webhook_url,
+        allowed_updates=Update.ALL_TYPES,
+        secret_token=secret_token,
+    )
+
+
+async def process_webhook_update(data: dict):
+    application = await get_or_create_application()
+    update = Update.de_json(data, application.bot)
+    await application.process_update(update)
+
+
+async def shutdown_application():
+    global telegram_app
+
+    if telegram_app is not None:
+        await telegram_app.stop()
+        await telegram_app.shutdown()
+        telegram_app = None
+
+
 def main():
     if not TELEGRAM_BOT_TOKEN:
         print("❌ TELEGRAM_BOT_TOKEN não configurado!")
@@ -394,20 +449,7 @@ def main():
     from database import Base, engine
     Base.metadata.create_all(bind=engine)
 
-    app = Application.builder().token(TELEGRAM_BOT_TOKEN).post_init(post_init).build()
-
-    # Comandos
-    app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(CommandHandler("ajuda", cmd_ajuda))
-    app.add_handler(CommandHandler("resumo", cmd_resumo))
-    app.add_handler(CommandHandler("saldo", cmd_saldo))
-    app.add_handler(CommandHandler("categorias", cmd_categorias))
-    app.add_handler(CommandHandler("ultimas", cmd_ultimas))
-
-    # Mensagens de transação (+/-)
-    app.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_transaction)
-    )
+    app = build_application()
 
     print("🤖 Bot do Telegram iniciado!")
     print("   Envie /start no Telegram para começar.")

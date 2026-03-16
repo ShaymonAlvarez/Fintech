@@ -1,5 +1,5 @@
 import threading
-from fastapi import FastAPI, Depends, HTTPException, Query
+from fastapi import FastAPI, Depends, HTTPException, Query, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import extract
@@ -37,7 +37,12 @@ from auth import (
     create_access_token,
     get_current_user,
 )
-from config import CORS_ORIGINS
+from config import (
+    CORS_ORIGINS,
+    TELEGRAM_BOT_TOKEN,
+    BACKEND_PUBLIC_URL,
+    TELEGRAM_WEBHOOK_SECRET,
+)
 
 # ==================== APP ====================
 
@@ -84,7 +89,7 @@ def health_check():
 
 
 @app.on_event("startup")
-def startup():
+async def startup():
     Base.metadata.create_all(bind=engine)
     db = SessionLocal()
     try:
@@ -101,19 +106,58 @@ def startup():
         db.close()
 
     # Inicia o bot do Telegram em thread separada
-    from config import TELEGRAM_BOT_TOKEN
     if TELEGRAM_BOT_TOKEN:
-        def _run_bot():
+        if BACKEND_PUBLIC_URL:
             try:
-                from bot import main as bot_main
-                bot_main()
+                from bot import setup_webhook
+
+                webhook_url = f"{BACKEND_PUBLIC_URL}/api/telegram/webhook"
+                await setup_webhook(webhook_url, TELEGRAM_WEBHOOK_SECRET or None)
+                print(f"🤖 Bot do Telegram configurado via webhook: {webhook_url}")
             except Exception as e:
-                print(f"❌ Erro no bot Telegram: {e}")
-        bot_thread = threading.Thread(target=_run_bot, daemon=True)
-        bot_thread.start()
-        print("🤖 Bot do Telegram iniciado em background!")
+                print(f"❌ Erro ao configurar webhook do Telegram: {e}")
+        else:
+            def _run_bot():
+                try:
+                    from bot import main as bot_main
+                    bot_main()
+                except Exception as e:
+                    print(f"❌ Erro no bot Telegram: {e}")
+
+            bot_thread = threading.Thread(target=_run_bot, daemon=True)
+            bot_thread.start()
+            print("🤖 Bot do Telegram iniciado em polling background!")
     else:
         print("⚠️  TELEGRAM_BOT_TOKEN não configurado — bot desativado.")
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    if TELEGRAM_BOT_TOKEN and BACKEND_PUBLIC_URL:
+        try:
+            from bot import shutdown_application
+
+            await shutdown_application()
+        except Exception as e:
+            print(f"❌ Erro ao encerrar bot Telegram: {e}")
+
+
+@app.post("/api/telegram/webhook")
+async def telegram_webhook(
+    request: Request,
+    x_telegram_bot_api_secret_token: str | None = Header(default=None),
+):
+    if TELEGRAM_WEBHOOK_SECRET and x_telegram_bot_api_secret_token != TELEGRAM_WEBHOOK_SECRET:
+        raise HTTPException(status_code=403, detail="Webhook inválido")
+
+    if not TELEGRAM_BOT_TOKEN:
+        raise HTTPException(status_code=503, detail="Bot não configurado")
+
+    from bot import process_webhook_update
+
+    payload = await request.json()
+    await process_webhook_update(payload)
+    return {"ok": True}
 
 
 # ==================== AUTH ====================

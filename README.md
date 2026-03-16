@@ -116,6 +116,8 @@ O dashboard estará em: **http://localhost:3000**
 TELEGRAM_BOT_TOKEN=1234567890:ABCdefGHIjklMNOpqrSTUvwxYZ
 ALLOWED_TELEGRAM_IDS=123456789
 SECRET_KEY=uma-senha-forte-e-unica-aqui
+BACKEND_PUBLIC_URL=https://seu-backend.up.railway.app
+TELEGRAM_WEBHOOK_SECRET=um-segredo-opcional
 ```
 
 ---
