@@ -96,9 +96,13 @@ export default function Sidebar({ isOpen, onToggle }: SidebarProps) {
           <p className="text-xs text-gray-400 leading-relaxed">
             Envie mensagens pelo Telegram para registrar gastos:
           </p>
-          <div className="mt-2 space-y-1">
-            <code className="block text-xs text-emerald-400">+150 salário</code>
-            <code className="block text-xs text-rose-400">-45 mercado</code>
+          <div className="mt-3 space-y-2 font-mono text-xs">
+            <div className="rounded-lg bg-black/20 px-2.5 py-2 text-emerald-400 whitespace-nowrap overflow-hidden text-ellipsis">
+              +150 salário
+            </div>
+            <div className="rounded-lg bg-black/20 px-2.5 py-2 text-rose-400 whitespace-nowrap overflow-hidden text-ellipsis">
+              -45 mercado
+            </div>
           </div>
         </div>
 

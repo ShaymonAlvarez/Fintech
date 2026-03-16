@@ -241,6 +241,22 @@ function getDaysInMonth(year: number, month: number) {
   return new Date(year, month, 0).getDate();
 }
 
+function getInvoiceMonth(dateString: string, closingDay: number) {
+  const date = new Date(dateString);
+  let invoiceMonth = date.getMonth() + 1;
+  let invoiceYear = date.getFullYear();
+
+  if (date.getDate() > closingDay) {
+    invoiceMonth += 1;
+    if (invoiceMonth > 12) {
+      invoiceMonth = 1;
+      invoiceYear += 1;
+    }
+  }
+
+  return { month: invoiceMonth, year: invoiceYear };
+}
+
 function getRecurringSourceLabel(expense: RecurringExpense) {
   const paymentLabel = PAYMENT_TYPE_LABELS[expense.payment_type] || expense.payment_type;
   if (expense.bank_name && ["pix", "debit"].includes(expense.payment_type)) {
@@ -472,16 +488,21 @@ export default function DashboardPage() {
     return map;
   }, [budgets]);
 
-  const transactionsByDay = useMemo(() => {
+  const cashTransactions = useMemo(
+    () => transactions.filter((transaction) => !(transaction.type === "expense" && transaction.payment_type === "credit")),
+    [transactions]
+  );
+
+  const cashTransactionsByDay = useMemo(() => {
     const grouped = new Map<string, Transaction[]>();
-    transactions.forEach((transaction) => {
+    cashTransactions.forEach((transaction) => {
       const key = transaction.created_at.slice(0, 10);
       const current = grouped.get(key) || [];
       current.push(transaction);
       grouped.set(key, current);
     });
     return grouped;
-  }, [transactions]);
+  }, [cashTransactions]);
 
   const scenarioByCategory = useMemo(() => {
     const map = new Map<string, number>();
@@ -655,11 +676,62 @@ export default function DashboardPage() {
       .map(([source]) => source);
   }, [fixedCommitmentRows]);
 
+  const cardInvoiceEventsByDate = useMemo(() => {
+    const grouped = new Map<string, PlannedDayEvent[]>();
+    const invoiceByCard = new Map<number, number>();
+
+    installments.forEach((installment) => {
+      const diff = monthDiff(installment.start_date, year, month);
+      if (diff >= 0 && diff < installment.remaining_installments) {
+        invoiceByCard.set(installment.card_id, (invoiceByCard.get(installment.card_id) || 0) + installment.monthly_amount);
+      }
+    });
+
+    subscriptions
+      .filter((subscription) => subscription.is_active)
+      .forEach((subscription) => {
+        invoiceByCard.set(subscription.card_id, (invoiceByCard.get(subscription.card_id) || 0) + subscription.monthly_amount);
+      });
+
+    transactions
+      .filter((transaction) => transaction.type === "expense" && transaction.payment_type === "credit" && transaction.card_id)
+      .forEach((transaction) => {
+        const card = cards.find((item) => item.id === transaction.card_id);
+        if (!card) return;
+        const invoice = getInvoiceMonth(transaction.created_at, card.closing_day);
+        if (invoice.year === year && invoice.month === month) {
+          invoiceByCard.set(card.id, (invoiceByCard.get(card.id) || 0) + transaction.amount);
+        }
+      });
+
+    invoiceByCard.forEach((amount, cardId) => {
+      if (amount <= 0) return;
+      const card = cards.find((item) => item.id === cardId);
+      if (!card) return;
+      const safeDay = Math.min(card.due_day, getDaysInMonth(year, month));
+      const date = `${year}-${String(month).padStart(2, "0")}-${String(safeDay).padStart(2, "0")}`;
+      const current = grouped.get(date) || [];
+      current.push({
+        id: `invoice-${card.id}-${year}-${month}`,
+        title: `Fatura ${card.bank_name}`,
+        amount,
+        source: `${card.icon} ${card.bank_name} · ${card.card_name}`,
+        tag: "Fatura do cartão",
+      });
+      grouped.set(date, current);
+    });
+
+    return grouped;
+  }, [installments, subscriptions, transactions, cards, year, month]);
+
   const plannedEventsByDate = useMemo(() => {
     const map = new Map<string, PlannedDayEvent[]>();
     const daysInMonth = getDaysInMonth(year, month);
 
     fixedCommitmentRows.forEach((row) => {
+      if (row.kind === "installment" || row.kind === "subscription") {
+        return;
+      }
       const safeDay = Math.min(row.dueDay, daysInMonth);
       const date = `${year}-${String(month).padStart(2, "0")}-${String(safeDay).padStart(2, "0")}`;
       const sourceText = Object.entries(row.sourceAllocations)
@@ -676,28 +748,38 @@ export default function DashboardPage() {
       map.set(date, current);
     });
 
+    cardInvoiceEventsByDate.forEach((events, date) => {
+      const current = map.get(date) || [];
+      map.set(date, [...current, ...events]);
+    });
+
     return map;
-  }, [fixedCommitmentRows, year, month]);
+  }, [fixedCommitmentRows, cardInvoiceEventsByDate, year, month]);
 
   const plannerDays = useMemo(() => {
     let runningBalance = openingBalance;
     return dailyFlow.map((day) => {
       const plannedEvents = plannedEventsByDate.get(day.date) || [];
       const plannedFixed = plannedEvents.reduce((sum, event) => sum + event.amount, 0);
-      const totalExpense = plannedFixed + day.variable_expenses;
+      const dayCashTransactions = cashTransactionsByDay.get(day.date) || [];
+      const cashVariable = dayCashTransactions
+        .filter((transaction) => transaction.type === "expense")
+        .reduce((sum, transaction) => sum + transaction.amount, 0);
+      const totalExpense = plannedFixed + cashVariable;
       const net = day.income - totalExpense;
       runningBalance += net;
 
       return {
         ...day,
         planned_fixed_expenses: plannedFixed,
+        variable_expenses: cashVariable,
         total_expense: totalExpense,
         net,
         running_balance: runningBalance,
         plannedEvents,
       } satisfies PlannerDay;
     });
-  }, [dailyFlow, plannedEventsByDate, openingBalance]);
+  }, [dailyFlow, plannedEventsByDate, openingBalance, cashTransactionsByDay]);
 
   const totalProjectedIncome = plannerDays.reduce((sum, day) => sum + day.income, 0);
   const totalFixedPlanned = fixedCommitmentRows.reduce((sum, row) => sum + row.amount, 0);
@@ -1329,7 +1411,7 @@ export default function DashboardPage() {
                 </div>
                 <div className="divide-y divide-white/5">
                   {plannerDays.map((day) => {
-                    const dayTransactions = transactionsByDay.get(day.date) || [];
+                    const dayTransactions = cashTransactionsByDay.get(day.date) || [];
                     const expanded = !!openDays[day.date];
                     const dayNumber = Number(day.date.slice(8, 10));
                     const dayHighlights = [
