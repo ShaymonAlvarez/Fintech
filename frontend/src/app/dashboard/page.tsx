@@ -1065,53 +1065,103 @@ export default function DashboardPage() {
                   </button>
                 }
               >
-                <div className="grid grid-cols-1 md:grid-cols-5 border-t border-white/10 text-sm">
-                  <div className="px-4 py-3 text-zinc-100 border-r border-white/10 md:col-span-2">Gasto por mês previsto / já comprometido:</div>
-                  <div className="px-4 py-3 font-semibold text-white border-r border-white/10">{fmt(projectedBaseExpense)} / {fmt(projectedBaseExpense + totalScenario)}</div>
-                  <div className="px-4 py-3 text-zinc-100 border-r border-white/10">O quanto ainda pode gastar:</div>
-                  <div className={`px-4 py-3 font-semibold ${canStillSpend >= 0 ? "text-emerald-300" : "text-red-300"}`}>{fmt(canStillSpend)}</div>
-                </div>
-                <div className="grid grid-cols-1 xl:grid-cols-[220px,1fr,320px]">
-                  <div className="bg-amber-800/80 p-6 flex flex-col justify-center border-r border-white/10 min-h-[220px]">
-                    <p className="text-3xl sm:text-4xl font-light text-amber-50 leading-tight">Metas -</p>
-                    <p className="text-3xl sm:text-4xl font-light text-amber-50 leading-tight">Salário:</p>
-                    <p className="text-4xl sm:text-5xl font-semibold text-amber-100 mt-2 break-words">{salaryTotal > 0 ? fmt(salaryTotal) : "—"}</p>
-                    <div className="mt-4 space-y-2 text-sm text-amber-100/80">
-                      <p>Saldo de entrada: {fmt(openingBalance)}</p>
-                      <p>Saldo projetado: {fmt(projectedClosingWithScenarios)}</p>
-                      <p>Pool semanal automático: {fmt(autoWeeklyBudgetBase)}</p>
+                <div className="p-4 sm:p-6 space-y-5 border-t border-white/10">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+                    <div className="rounded-2xl border border-white/10 bg-black/10 p-4">
+                      <p className="text-xs uppercase tracking-wide text-amber-100/60">Comprometido base</p>
+                      <p className="mt-2 text-2xl font-semibold text-white">{fmt(projectedBaseExpense)}</p>
+                      <p className="mt-1 text-xs text-amber-100/60">Fixos + variáveis já lançados</p>
+                    </div>
+                    <div className="rounded-2xl border border-white/10 bg-black/10 p-4">
+                      <p className="text-xs uppercase tracking-wide text-amber-100/60">Comprometido com cenários</p>
+                      <p className="mt-2 text-2xl font-semibold text-white">{fmt(projectedBaseExpense + totalScenario)}</p>
+                      <p className="mt-1 text-xs text-amber-100/60">Base mensal + extras planejados</p>
+                    </div>
+                    <div className="rounded-2xl border border-white/10 bg-black/10 p-4">
+                      <p className="text-xs uppercase tracking-wide text-amber-100/60">Ainda pode gastar</p>
+                      <p className={`mt-2 text-2xl font-semibold ${canStillSpend >= 0 ? "text-emerald-300" : "text-red-300"}`}>{fmt(canStillSpend)}</p>
+                      <p className="mt-1 text-xs text-amber-100/60">Sobra antes de apertar o mês</p>
+                    </div>
+                    <div className="rounded-2xl border border-white/10 bg-black/10 p-4">
+                      <p className="text-xs uppercase tracking-wide text-amber-100/60">Pool semanal automático</p>
+                      <p className="mt-2 text-2xl font-semibold text-cyan-200">{fmt(autoWeeklyBudgetBase)}</p>
+                      <p className="mt-1 text-xs text-amber-100/60">Base usada no tracker semanal</p>
                     </div>
                   </div>
-                  <div className="overflow-x-auto border-r border-white/10">
-                    <table className="w-full text-sm min-w-[520px]">
-                      <thead>
-                        <tr className="bg-amber-900/80 text-amber-50">
-                          <th className="px-4 py-3 text-left">Categorias</th>
-                          <th className="px-4 py-3 text-right">Máximo Previsto</th>
-                          <th className="px-4 py-3 text-right">Atual</th>
-                          <th className="px-4 py-3 text-right">Cenários</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {categoryRows.map((row) => (
-                          <tr key={row.id} className="border-t border-black/30 text-amber-50/95">
-                            <td className="px-4 py-2.5 font-medium">{row.icon} {row.name}</td>
-                            <td className="px-4 py-2.5 text-right">{row.budget > 0 ? fmt(row.budget) : "R$ 0,00"}</td>
-                            <td className="px-4 py-2.5 text-right">{fmt(row.actual)}</td>
-                            <td className="px-4 py-2.5 text-right">{row.plannedScenario > 0 ? fmt(row.plannedScenario) : "—"}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                  <div className="p-4 sm:p-6 bg-[#4d0c06]/60">
-                    <div className="space-y-3 text-sm text-amber-50">
-                      <div className="flex justify-between"><span>Receitas do mês</span><span className="font-semibold">{fmt(totalProjectedIncome)}</span></div>
-                      <div className="flex justify-between"><span>Fixos previstos</span><span className="font-semibold">{fmt(totalFixedPlanned)}</span></div>
-                      <div className="flex justify-between"><span>Variáveis realizados</span><span className="font-semibold">{fmt(totalVariableSpent)}</span></div>
-                      <div className="flex justify-between"><span>Planejado em cenários</span><span className="font-semibold">{fmt(totalScenario)}</span></div>
-                      <div className="flex justify-between"><span>Saldo atual real</span><span className={`font-semibold ${(summary?.balance || 0) >= 0 ? "text-emerald-300" : "text-red-300"}`}>{fmt(summary?.balance || 0)}</span></div>
-                      <div className="flex justify-between"><span>Saldo futuro previsto</span><span className={`font-semibold ${projectedClosingWithScenarios >= 0 ? "text-emerald-300" : "text-red-300"}`}>{fmt(projectedClosingWithScenarios)}</span></div>
+
+                  <div className="grid grid-cols-1 xl:grid-cols-[260px,1fr,330px] gap-4 items-start">
+                    <div className="rounded-3xl border border-amber-400/15 bg-gradient-to-b from-[#9a4c12] to-[#7b3408] p-6 min-h-[260px] flex flex-col justify-between shadow-lg shadow-black/20">
+                      <div>
+                        <p className="text-3xl sm:text-4xl font-light text-amber-50 leading-tight">Metas -</p>
+                        <p className="text-3xl sm:text-4xl font-light text-amber-50 leading-tight">Salário:</p>
+                        <p className="text-4xl sm:text-5xl font-semibold text-white mt-4 break-words">{salaryTotal > 0 ? fmt(salaryTotal) : "—"}</p>
+                      </div>
+                      <div className="grid grid-cols-1 gap-3 mt-6">
+                        <div className="rounded-2xl bg-black/10 border border-white/10 p-3">
+                          <p className="text-xs uppercase tracking-wide text-amber-100/60">Saldo de entrada</p>
+                          <p className="text-lg font-semibold text-white mt-1">{fmt(openingBalance)}</p>
+                        </div>
+                        <div className="rounded-2xl bg-black/10 border border-white/10 p-3">
+                          <p className="text-xs uppercase tracking-wide text-amber-100/60">Saldo projetado</p>
+                          <p className={`text-lg font-semibold mt-1 ${projectedClosingWithScenarios >= 0 ? "text-emerald-200" : "text-red-200"}`}>{fmt(projectedClosingWithScenarios)}</p>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="rounded-3xl border border-white/10 bg-black/10 overflow-hidden">
+                      <div className="px-4 sm:px-5 py-4 border-b border-white/10 flex items-center justify-between gap-3">
+                        <div>
+                          <h4 className="text-white font-semibold">Categorias e limites</h4>
+                          <p className="text-xs text-amber-100/60 mt-1">Tudo organizado sem esconder nenhuma informação</p>
+                        </div>
+                        <div className="text-xs text-amber-100/60">{categoryRows.length} categoria(s)</div>
+                      </div>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm min-w-[560px]">
+                          <thead>
+                            <tr className="bg-amber-900/50 text-amber-50/90">
+                              <th className="px-4 py-3 text-left">Categorias</th>
+                              <th className="px-4 py-3 text-right">Máximo Previsto</th>
+                              <th className="px-4 py-3 text-right">Atual</th>
+                              <th className="px-4 py-3 text-right">Cenários</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {categoryRows.length === 0 ? (
+                              <tr>
+                                <td colSpan={4} className="px-4 py-8 text-center text-sm text-amber-100/60">
+                                  Nenhuma categoria com limite ou uso neste mês.
+                                </td>
+                              </tr>
+                            ) : (
+                              categoryRows.map((row) => (
+                                <tr key={row.id} className="border-t border-white/5 text-amber-50/95 hover:bg-white/[0.03]">
+                                  <td className="px-4 py-3 font-medium">{row.icon} {row.name}</td>
+                                  <td className="px-4 py-3 text-right">{row.budget > 0 ? fmt(row.budget) : "R$ 0,00"}</td>
+                                  <td className="px-4 py-3 text-right">{fmt(row.actual)}</td>
+                                  <td className="px-4 py-3 text-right">{row.plannedScenario > 0 ? fmt(row.plannedScenario) : "—"}</td>
+                                </tr>
+                              ))
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-1 gap-3">
+                      {[
+                        ["Receitas do mês", fmt(totalProjectedIncome), "text-white"],
+                        ["Fixos previstos", fmt(totalFixedPlanned), "text-white"],
+                        ["Variáveis realizados", fmt(totalVariableSpent), "text-white"],
+                        ["Planejado em cenários", fmt(totalScenario), "text-white"],
+                        ["Saldo atual real", fmt(summary?.balance || 0), (summary?.balance || 0) >= 0 ? "text-emerald-300" : "text-red-300"],
+                        ["Saldo futuro previsto", fmt(projectedClosingWithScenarios), projectedClosingWithScenarios >= 0 ? "text-emerald-300" : "text-red-300"],
+                      ].map(([label, value, color]) => (
+                        <div key={String(label)} className="rounded-2xl border border-white/10 bg-black/10 p-4">
+                          <p className="text-xs uppercase tracking-wide text-amber-100/60">{label}</p>
+                          <p className={`mt-2 text-xl font-semibold ${color}`}>{value}</p>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 </div>
