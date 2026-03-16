@@ -1,6 +1,6 @@
 "use client";
 
-import { Wallet, LogOut, LayoutDashboard, BarChart2, RefreshCw, CreditCard, CalendarDays, Sparkles } from "lucide-react";
+import { Wallet, LogOut, LayoutDashboard, BarChart2, RefreshCw, CreditCard, Sparkles } from "lucide-react";
 
 interface SidebarProps {
   isOpen?: boolean;
@@ -80,13 +80,6 @@ export default function Sidebar({ isOpen, onToggle }: SidebarProps) {
           >
             <CreditCard className="w-5 h-5" />
             Cartões
-          </a>
-          <a
-            href="/dashboard/diario"
-            className="flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-white/5 text-gray-400 hover:text-white font-medium transition-colors"
-          >
-            <CalendarDays className="w-5 h-5" />
-            Fluxo Diário
           </a>
           <a
             href="/dashboard/cenarios"

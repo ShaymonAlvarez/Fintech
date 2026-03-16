@@ -81,6 +81,8 @@ interface Budget {
   budget_amount: number;
 }
 
+type BudgetScope = "all" | "vrva";
+
 interface SalaryConfig {
   total_amount: number;
 }
@@ -334,6 +336,9 @@ export default function DashboardPage() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [showSalaryModal, setShowSalaryModal] = useState(false);
   const [showPartnerModal, setShowPartnerModal] = useState(false);
+  const [showBudgetModal, setShowBudgetModal] = useState(false);
+  const [showCommitmentModal, setShowCommitmentModal] = useState(false);
+  const [budgetScope, setBudgetScope] = useState<BudgetScope>("all");
 
   const [newAmount, setNewAmount] = useState("");
   const [newType, setNewType] = useState("expense");
@@ -347,6 +352,14 @@ export default function DashboardPage() {
   const [partnerNote, setPartnerNote] = useState("");
   const [partnerDate, setPartnerDate] = useState(ymd(new Date()));
   const [partnerPaid, setPartnerPaid] = useState(false);
+  const [budgetCategoryId, setBudgetCategoryId] = useState("");
+  const [budgetAmount, setBudgetAmount] = useState("");
+  const [commitmentName, setCommitmentName] = useState("");
+  const [commitmentAmount, setCommitmentAmount] = useState("");
+  const [commitmentDay, setCommitmentDay] = useState(String(new Date().getDate()));
+  const [commitmentPaymentType, setCommitmentPaymentType] = useState("pix");
+  const [commitmentSource, setCommitmentSource] = useState("");
+  const [commitmentCategoryId, setCommitmentCategoryId] = useState("");
 
   const [panelOpen, setPanelOpen] = useState<Record<PanelKey, boolean>>({
     summary: true,
@@ -522,6 +535,12 @@ export default function DashboardPage() {
 
   const vrvaTotalBudget = vrvaRows.reduce((sum, row) => sum + row.budget, 0);
   const vrvaTotalActual = vrvaRows.reduce((sum, row) => sum + row.actual, 0);
+  const budgetModalCategories = useMemo(() => {
+    if (budgetScope === "vrva") {
+      return categories.filter((category) => ["Mercados/Feiras", "Restaurante", "iFood"].includes(category.name));
+    }
+    return categories;
+  }, [categories, budgetScope]);
 
   const fixedCommitmentRows = useMemo(() => {
     const rows = new Map<string, FixedCommitmentRow>();
@@ -805,6 +824,69 @@ export default function DashboardPage() {
     setEditingWeeklyBudget(false);
   };
 
+  const openBudgetEditor = (scope: BudgetScope) => {
+    setBudgetScope(scope);
+    const availableCategories = scope === "vrva"
+      ? categories.filter((category) => ["Mercados/Feiras", "Restaurante", "iFood"].includes(category.name))
+      : categories;
+    const firstCategory = availableCategories[0];
+    setBudgetCategoryId(firstCategory ? String(firstCategory.id) : "");
+    setBudgetAmount(firstCategory ? String(budgetMap.get(firstCategory.id) || "") : "");
+    setShowBudgetModal(true);
+  };
+
+  const handleBudgetCategoryChange = (categoryId: string) => {
+    setBudgetCategoryId(categoryId);
+    if (!categoryId) {
+      setBudgetAmount("");
+      return;
+    }
+    setBudgetAmount(String(budgetMap.get(Number(categoryId)) || ""));
+  };
+
+  const handleSaveBudget = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const categoryId = Number(budgetCategoryId);
+    const amount = parseFloat(budgetAmount);
+    if (!categoryId || Number.isNaN(amount) || amount < 0) return;
+
+    try {
+      await api.post("/budgets", { category_id: categoryId, budget_amount: amount });
+      setShowBudgetModal(false);
+      loadData();
+    } catch (error) {
+      console.error("Erro ao salvar limite da categoria:", error);
+    }
+  };
+
+  const handleAddCommitment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const amount = parseFloat(commitmentAmount);
+    const dueDay = parseInt(commitmentDay, 10);
+    if (Number.isNaN(amount) || amount <= 0 || Number.isNaN(dueDay) || dueDay < 1 || dueDay > 31) return;
+
+    try {
+      await api.post("/recurring", {
+        name: commitmentName,
+        amount,
+        due_day: dueDay,
+        bank_name: commitmentSource || null,
+        payment_type: commitmentPaymentType,
+        category_id: commitmentCategoryId ? parseInt(commitmentCategoryId, 10) : null,
+      });
+      setShowCommitmentModal(false);
+      setCommitmentName("");
+      setCommitmentAmount("");
+      setCommitmentDay(String(new Date().getDate()));
+      setCommitmentPaymentType("pix");
+      setCommitmentSource("");
+      setCommitmentCategoryId("");
+      loadData();
+    } catch (error) {
+      console.error("Erro ao adicionar compromisso fixo:", error);
+    }
+  };
+
   const prevMonth = () => {
     if (month === 1) {
       setMonth(12);
@@ -887,6 +969,11 @@ export default function DashboardPage() {
                 open={panelOpen.summary}
                 onToggle={() => togglePanel("summary")}
                 className="border border-red-500/20 bg-gradient-to-br from-[#5f0c05] via-[#4b0904] to-[#360603]"
+                actions={
+                  <button onClick={() => openBudgetEditor("all")} className="px-3 py-2 rounded-xl bg-white/10 text-white text-sm hover:bg-white/15">
+                    Limites por categoria
+                  </button>
+                }
               >
                 <div className="grid grid-cols-1 md:grid-cols-5 border-t border-white/10 text-sm">
                   <div className="px-4 py-3 text-zinc-100 border-r border-white/10 md:col-span-2">Gasto por mês previsto / já comprometido:</div>
@@ -978,7 +1065,14 @@ export default function DashboardPage() {
                   icon={<Wallet className="w-5 h-5 text-emerald-400" />}
                   open={panelOpen.vrva}
                   onToggle={() => togglePanel("vrva")}
-                  actions={<div className="text-sm text-gray-400">{fmt(vrvaTotalActual)} / {fmt(vrvaTotalBudget)}</div>}
+                  actions={
+                    <div className="flex items-center gap-2 flex-wrap justify-end">
+                      <div className="text-sm text-gray-400">{fmt(vrvaTotalActual)} / {fmt(vrvaTotalBudget)}</div>
+                      <button onClick={() => openBudgetEditor("vrva")} className="px-3 py-2 rounded-xl bg-white/10 text-white text-sm hover:bg-white/15">
+                        Ajustar VR/VA
+                      </button>
+                    </div>
+                  }
                 >
                   <div className="overflow-x-auto">
                     <table className="w-full text-sm min-w-[520px]">
@@ -1057,6 +1151,11 @@ export default function DashboardPage() {
                 open={panelOpen.cards}
                 onToggle={() => togglePanel("cards")}
                 className="bg-[#1f2125] border border-white/10"
+                actions={
+                  <button onClick={() => setShowCommitmentModal(true)} className="px-3 py-2 rounded-xl bg-white/10 text-white text-sm hover:bg-white/15">
+                    Novo compromisso
+                  </button>
+                }
               >
                 <div className="px-4 sm:px-6 py-4 border-b border-white/10 bg-[#102b33] text-xs sm:text-sm text-cyan-100 flex flex-wrap gap-3">
                   <span>Total fixo do mês: <strong>{fmt(totalFixedPlanned)}</strong></span>
@@ -1346,6 +1445,59 @@ export default function DashboardPage() {
               <input type="date" value={partnerDate} onChange={(e) => setPartnerDate(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white" />
               <label className="flex items-center gap-2 text-sm text-gray-300"><input type="checkbox" checked={partnerPaid} onChange={(e) => setPartnerPaid(e.target.checked)} className="accent-emerald-500" /> Já foi pago por ela</label>
               <button type="submit" className="w-full py-3 rounded-xl bg-slate-700 hover:bg-slate-600 text-white font-semibold">Salvar</button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {showBudgetModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowBudgetModal(false)} />
+          <div className="relative bg-[#1a1a2e] border border-white/10 rounded-2xl p-6 w-full max-w-md shadow-2xl">
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="text-lg font-semibold text-white">{budgetScope === "vrva" ? "Limites de VR / VA" : "Limites por categoria"}</h3>
+              <button onClick={() => setShowBudgetModal(false)} className="p-1.5 rounded-lg hover:bg-white/5 text-gray-400 hover:text-white transition-colors"><X className="w-5 h-5" /></button>
+            </div>
+            <form onSubmit={handleSaveBudget} className="space-y-4">
+              <select value={budgetCategoryId} onChange={(e) => handleBudgetCategoryChange(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white" required>
+                <option value="" className="bg-[#1a1a2e]">Selecionar categoria</option>
+                {budgetModalCategories.map((category) => (
+                  <option key={category.id} value={category.id} className="bg-[#1a1a2e]">{category.icon} {category.name}</option>
+                ))}
+              </select>
+              <input type="number" step="0.01" min="0" value={budgetAmount} onChange={(e) => setBudgetAmount(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white" placeholder="Valor limite" required />
+              <button type="submit" className="w-full py-3 rounded-xl bg-gradient-to-r from-amber-600 to-orange-600 text-white font-semibold">Salvar limite</button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {showCommitmentModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowCommitmentModal(false)} />
+          <div className="relative bg-[#1f2125] border border-white/10 rounded-2xl p-6 w-full max-w-md shadow-2xl">
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="text-lg font-semibold text-white">Novo compromisso fixo</h3>
+              <button onClick={() => setShowCommitmentModal(false)} className="p-1.5 rounded-lg hover:bg-white/5 text-gray-400 hover:text-white transition-colors"><X className="w-5 h-5" /></button>
+            </div>
+            <form onSubmit={handleAddCommitment} className="space-y-4">
+              <input type="text" value={commitmentName} onChange={(e) => setCommitmentName(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white" placeholder="Nome do serviço / compromisso" required />
+              <div className="grid grid-cols-2 gap-3">
+                <input type="number" step="0.01" min="0.01" value={commitmentAmount} onChange={(e) => setCommitmentAmount(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white" placeholder="Valor" required />
+                <input type="number" min="1" max="31" value={commitmentDay} onChange={(e) => setCommitmentDay(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white" placeholder="Dia" required />
+              </div>
+              <select value={commitmentPaymentType} onChange={(e) => setCommitmentPaymentType(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white">
+                <option value="pix" className="bg-[#1f2125]">PIX</option>
+                <option value="debit" className="bg-[#1f2125]">Débito</option>
+                <option value="credit" className="bg-[#1f2125]">Crédito</option>
+                <option value="bank_transfer" className="bg-[#1f2125]">Transferência</option>
+              </select>
+              <input type="text" value={commitmentSource} onChange={(e) => setCommitmentSource(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white" placeholder="Fonte / banco / cartão" />
+              <select value={commitmentCategoryId} onChange={(e) => setCommitmentCategoryId(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white">
+                <option value="" className="bg-[#1f2125]">Categoria opcional</option>
+                {categories.map((cat) => <option key={cat.id} value={cat.id} className="bg-[#1f2125]">{cat.icon} {cat.name}</option>)}
+              </select>
+              <button type="submit" className="w-full py-3 rounded-xl bg-slate-700 hover:bg-slate-600 text-white font-semibold">Salvar compromisso</button>
             </form>
           </div>
         </div>

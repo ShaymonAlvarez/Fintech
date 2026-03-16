@@ -4,9 +4,16 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import Sidebar from "@/components/Sidebar";
 import { api } from "@/lib/api";
-import { CreditCard, Menu, ChevronLeft, ChevronRight, Landmark, Calendar } from "lucide-react";
-
-// ==================== TYPES ====================
+import {
+  CreditCard,
+  Menu,
+  ChevronLeft,
+  ChevronRight,
+  Landmark,
+  Pencil,
+  Check,
+  X,
+} from "lucide-react";
 
 interface CardData {
   id: number;
@@ -61,52 +68,90 @@ interface LoanScheduleItem {
   is_paid: boolean;
 }
 
+interface CardMonthRow {
+  month: number;
+  label: string;
+  fatura: number;
+  variavel: number;
+  assinaturas: number;
+  total: number;
+}
+
 const MONTHS = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
 
-function fmt(v: number) { return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" }); }
+function fmt(v: number) {
+  return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+}
 
-function getInstallmentForMonth(inst: CardInstallment, month: number, year: number): number {
+function getInstallmentForMonth(inst: CardInstallment, month: number, year: number) {
   const startDate = new Date(inst.start_date);
   const diff = (year - startDate.getFullYear()) * 12 + (month - (startDate.getMonth() + 1));
   if (diff >= 0 && diff < inst.remaining_installments) return inst.monthly_amount;
   return 0;
 }
 
-// ==================== COMPONENT ====================
-
 export default function CartoesPage() {
   const router = useRouter();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [cards, setCards] = useState<CardData[]>([]);
-  const [selectedCard, setSelectedCard] = useState<number | null>(null);
-  const [installments, setInstallments] = useState<CardInstallment[]>([]);
-  const [subscriptions, setSubscriptions] = useState<CardSubscription[]>([]);
+  const [installmentsByCard, setInstallmentsByCard] = useState<Record<number, CardInstallment[]>>({});
+  const [subscriptionsByCard, setSubscriptionsByCard] = useState<Record<number, CardSubscription[]>>({});
   const [loans, setLoans] = useState<Loan[]>([]);
   const [loanSchedules, setLoanSchedules] = useState<Record<number, LoanScheduleItem[]>>({});
   const [viewYear, setViewYear] = useState(new Date().getFullYear());
   const [loading, setLoading] = useState(true);
+  const [cardLimits, setCardLimits] = useState<Record<string, number>>({});
+  const [editingLimitId, setEditingLimitId] = useState<number | null>(null);
+  const [limitInput, setLimitInput] = useState("");
 
-  const loadCards = useCallback(async () => {
+  useEffect(() => {
+    const saved = localStorage.getItem("cards-credit-limits");
+    if (saved) {
+      try {
+        setCardLimits(JSON.parse(saved));
+      } catch {
+        setCardLimits({});
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem("cards-credit-limits", JSON.stringify(cardLimits));
+  }, [cardLimits]);
+
+  const loadData = useCallback(async () => {
+    setLoading(true);
     try {
-      const [cardsData, loansData] = await Promise.all([
+      const [cardsData, loansData, scheduleData] = await Promise.all([
         api.get("/cards"),
         api.get("/loans"),
+        api.get("/loans/schedule").catch(() => []),
       ]);
-      setCards(cardsData);
-      setLoans(loansData);
-      if (cardsData.length > 0 && !selectedCard) {
-        setSelectedCard(cardsData[0].id);
-      }
 
-      // Load loan schedules
-      try {
-        const scheduleData = await api.get("/loans/schedule");
-        const schedMap: Record<number, LoanScheduleItem[]> = {};
-        for (const item of scheduleData) {
-          schedMap[item.loan.id] = item.schedule;
-        }
-        setLoanSchedules(schedMap);
-      } catch { /* endpoint may not exist yet */ }
+      const installmentMap: Record<number, CardInstallment[]> = {};
+      const subscriptionMap: Record<number, CardSubscription[]> = {};
+
+      await Promise.all(
+        (cardsData as CardData[]).map(async (card) => {
+          const [installments, subscriptions] = await Promise.all([
+            api.get(`/cards/${card.id}/installments`).catch(() => []),
+            api.get(`/cards/${card.id}/subscriptions`).catch(() => []),
+          ]);
+          installmentMap[card.id] = installments;
+          subscriptionMap[card.id] = subscriptions;
+        })
+      );
+
+      const scheduleMap: Record<number, LoanScheduleItem[]> = {};
+      (scheduleData as Array<{ loan: Loan; schedule: LoanScheduleItem[] }>).forEach((item) => {
+        scheduleMap[item.loan.id] = item.schedule;
+      });
+
+      setCards(cardsData);
+      setInstallmentsByCard(installmentMap);
+      setSubscriptionsByCard(subscriptionMap);
+      setLoans(loansData);
+      setLoanSchedules(scheduleMap);
     } catch (err: unknown) {
       const e = err as { status?: number };
       if (e.status === 401) {
@@ -115,51 +160,122 @@ export default function CartoesPage() {
       }
     }
     setLoading(false);
-  }, [router, selectedCard]);
-
-  const loadCardDetails = useCallback(async (cardId: number) => {
-    try {
-      const [inst, subs] = await Promise.all([
-        api.get(`/cards/${cardId}/installments`),
-        api.get(`/cards/${cardId}/subscriptions`),
-      ]);
-      setInstallments(inst);
-      setSubscriptions(subs);
-    } catch (err) {
-      console.error("Erro ao carregar detalhes do cartão:", err);
-    }
-  }, []);
+  }, [router]);
 
   useEffect(() => {
     const token = localStorage.getItem("token");
-    if (!token) { router.push("/login"); return; }
-    loadCards();
-  }, [loadCards, router]);
+    if (!token) {
+      router.push("/login");
+      return;
+    }
+    loadData();
+  }, [loadData, router]);
 
-  useEffect(() => {
-    if (selectedCard) loadCardDetails(selectedCard);
-  }, [selectedCard, loadCardDetails]);
+  const cardMonthlyRows = useMemo(() => {
+    const rows: Record<number, CardMonthRow[]> = {};
 
-  const card = cards.find((c) => c.id === selectedCard) ?? cards[0];
+    cards.forEach((card) => {
+      const installments = installmentsByCard[card.id] || [];
+      const subscriptions = (subscriptionsByCard[card.id] || []).filter((item) => item.is_active);
+      const monthlySubscription = subscriptions.reduce((sum, item) => sum + item.monthly_amount, 0);
 
-  const monthlyData = useMemo(() => {
-    if (!card) return [];
-    const activeSubs = subscriptions.filter((s) => s.is_active);
-    const subTotal = activeSubs.reduce((s, sub) => s + sub.monthly_amount, 0);
-    return Array.from({ length: 12 }, (_, i) => {
-      const m = i + 1;
-      const fatura = installments.reduce((s, inst) => s + getInstallmentForMonth(inst, m, viewYear), 0);
-      return { month: m, label: MONTHS[i], fatura, assinaturas: subTotal, variavel: 0, total: fatura + subTotal };
+      rows[card.id] = Array.from({ length: 12 }, (_, index) => {
+        const month = index + 1;
+        const fatura = installments.reduce((sum, installment) => sum + getInstallmentForMonth(installment, month, viewYear), 0);
+        const variavel = 0;
+        const assinaturas = monthlySubscription;
+        return {
+          month,
+          label: MONTHS[index],
+          fatura,
+          variavel,
+          assinaturas,
+          total: fatura + variavel + assinaturas,
+        };
+      });
     });
-  }, [card, installments, subscriptions, viewYear]);
 
-  const totalFatura = monthlyData.reduce((s, d) => s + d.fatura, 0);
-  const totalAssinaturas = monthlyData.reduce((s, d) => s + d.assinaturas, 0);
-  const totalVariavel = monthlyData.reduce((s, d) => s + d.variavel, 0);
-  const maxTotal = Math.max(...monthlyData.map((d) => d.total), 1);
+    return rows;
+  }, [cards, installmentsByCard, subscriptionsByCard, viewYear]);
 
-  const currentMonth = new Date().getMonth() + 1;
-  const currentYear = new Date().getFullYear();
+  const consolidatedMonthRows = useMemo(() => {
+    return Array.from({ length: 12 }, (_, index) => {
+      const month = index + 1;
+      const cardCommitted = cards.reduce((sum, card) => sum + (cardMonthlyRows[card.id]?.[index]?.total || 0), 0);
+      const loansCommitted = loans.reduce((sum, loan) => {
+        const schedule = loanSchedules[loan.id] || [];
+        return sum + schedule.filter((item) => item.year === viewYear && item.month === month).reduce((acc, item) => acc + item.amount, 0);
+      }, 0);
+      return {
+        month,
+        label: MONTHS[index],
+        total: cardCommitted + loansCommitted,
+      };
+    });
+  }, [cards, cardMonthlyRows, loans, loanSchedules, viewYear]);
+
+  const cardLimitRows = useMemo(() => {
+    const currentMonth = new Date().getMonth() + 1;
+    const currentYear = new Date().getFullYear();
+
+    return cards.map((card) => {
+      const limit = cardLimits[String(card.id)] || 0;
+      const used = (cardMonthlyRows[card.id] || []).find((item) => item.month === (viewYear === currentYear ? currentMonth : 1))?.total || 0;
+      return {
+        id: `card-${card.id}`,
+        label: `Cartão ${card.bank_name}`,
+        total: limit,
+        used,
+        available: limit - used,
+      };
+    });
+  }, [cards, cardLimits, cardMonthlyRows, viewYear]);
+
+  const loanLimitRows = useMemo(() => {
+    return loans.map((loan) => {
+      const remaining = loan.remaining_installments * loan.installment_amount;
+      const paid = Math.max(loan.total_amount - remaining, 0);
+      return {
+        id: `loan-${loan.id}`,
+        label: loan.bank_name ? `Empréstimo ${loan.bank_name}` : loan.name,
+        total: loan.total_amount,
+        used: paid,
+        available: remaining,
+      };
+    });
+  }, [loans]);
+
+  const outstandingByType = useMemo(() => {
+    const grouped = new Map<string, number>();
+
+    cards.forEach((card) => {
+      const total = (installmentsByCard[card.id] || []).reduce((sum, installment) => sum + installment.remaining_installments * installment.monthly_amount, 0);
+      grouped.set(card.bank_name, (grouped.get(card.bank_name) || 0) + total);
+    });
+
+    loans.forEach((loan) => {
+      const key = loan.bank_name ? `Empréstimo ${loan.bank_name}` : loan.name;
+      grouped.set(key, (grouped.get(key) || 0) + loan.remaining_installments * loan.installment_amount);
+    });
+
+    return Array.from(grouped.entries()).map(([label, total]) => ({ label, total }));
+  }, [cards, installmentsByCard, loans]);
+
+  const openLimitEditor = (cardId: number) => {
+    setEditingLimitId(cardId);
+    setLimitInput(String(cardLimits[String(cardId)] || ""));
+  };
+
+  const saveLimit = () => {
+    if (editingLimitId === null) return;
+    const value = parseFloat(limitInput.replace(",", "."));
+    setCardLimits((current) => ({
+      ...current,
+      [String(editingLimitId)]: Number.isNaN(value) ? 0 : value,
+    }));
+    setEditingLimitId(null);
+    setLimitInput("");
+  };
 
   if (loading) {
     return (
@@ -171,10 +287,8 @@ export default function CartoesPage() {
 
   return (
     <div className="flex h-screen bg-gray-950 text-gray-100">
-      {/* Sidebar overlay */}
       <div className={`fixed inset-0 z-40 lg:hidden ${sidebarOpen ? "" : "pointer-events-none"}`}>
-        <div className={`absolute inset-0 bg-black/60 transition-opacity ${sidebarOpen ? "opacity-100" : "opacity-0"}`}
-          onClick={() => setSidebarOpen(false)} />
+        <div className={`absolute inset-0 bg-black/60 transition-opacity ${sidebarOpen ? "opacity-100" : "opacity-0"}`} onClick={() => setSidebarOpen(false)} />
         <div className={`absolute left-0 top-0 h-full w-64 bg-gray-900 transition-transform ${sidebarOpen ? "translate-x-0" : "-translate-x-full"}`}>
           <Sidebar />
         </div>
@@ -182,299 +296,239 @@ export default function CartoesPage() {
       <div className="hidden lg:block w-64 flex-shrink-0"><Sidebar /></div>
 
       <div className="flex-1 overflow-auto">
-        {/* Header */}
         <div className="sticky top-0 z-30 bg-gray-950/90 backdrop-blur border-b border-gray-800 px-6 py-4 flex items-center gap-4">
           <button className="lg:hidden text-gray-400 hover:text-white" onClick={() => setSidebarOpen(true)}>
             <Menu className="w-5 h-5" />
           </button>
           <CreditCard className="w-5 h-5 text-purple-400" />
           <div>
-            <h1 className="text-lg font-bold text-white">Cartões de Crédito</h1>
-            <p className="text-xs text-gray-400">{cards.length} cartões · visão anual</p>
+            <h1 className="text-lg font-bold text-white">Cartões e dívidas</h1>
+            <p className="text-xs text-gray-400">Visão anual consolidada e por cartão</p>
           </div>
           <div className="ml-auto flex items-center gap-2 bg-gray-900 border border-gray-700 rounded-lg px-3 py-1.5">
-            <button onClick={() => setViewYear((y) => y - 1)} className="text-gray-400 hover:text-white transition">
+            <button onClick={() => setViewYear((year) => year - 1)} className="text-gray-400 hover:text-white transition">
               <ChevronLeft className="w-4 h-4" />
             </button>
             <span className="text-sm font-semibold text-white w-12 text-center">{viewYear}</span>
-            <button onClick={() => setViewYear((y) => y + 1)} className="text-gray-400 hover:text-white transition">
+            <button onClick={() => setViewYear((year) => year + 1)} className="text-gray-400 hover:text-white transition">
               <ChevronRight className="w-4 h-4" />
             </button>
           </div>
         </div>
 
-        <div className="p-6 space-y-8">
-          {cards.length === 0 ? (
-            <div className="bg-gray-900 border border-gray-800 border-dashed rounded-2xl p-12 text-center">
-              <CreditCard className="w-12 h-12 text-gray-700 mx-auto mb-4" />
-              <p className="text-gray-500 text-sm">Nenhum cartão cadastrado</p>
-              <p className="text-gray-600 text-xs mt-1">Adicione cartões pelo Telegram ou pela API</p>
+        <div className="p-6 space-y-6">
+          <div className="grid grid-cols-1 xl:grid-cols-[420px,1fr] gap-6">
+            <div className="space-y-6">
+              <section className="rounded-2xl border border-[#6d1d4f] bg-[#741b4d] overflow-hidden">
+                <div className="px-5 py-4 border-b border-white/10 flex items-center justify-between gap-3">
+                  <h2 className="text-white font-bold">Limites</h2>
+                  <span className="text-xs text-white/70">Você pode editar os limites dos cartões</span>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-[#6a1546] text-white">
+                      <tr>
+                        <th className="px-4 py-3 text-left">Limites</th>
+                        <th className="px-4 py-3 text-right">Total</th>
+                        <th className="px-4 py-3 text-right">Usado</th>
+                        <th className="px-4 py-3 text-right">Disponível</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {cardLimitRows.map((row) => (
+                        <tr key={row.id} className="border-t border-white/10 text-white">
+                          <td className="px-4 py-3">
+                            <div className="flex items-center justify-between gap-2">
+                              <span>{row.label}</span>
+                              {row.id.startsWith("card-") && (
+                                editingLimitId === Number(row.id.replace("card-", "")) ? (
+                                  <span className="flex items-center gap-1">
+                                    <input
+                                      type="number"
+                                      value={limitInput}
+                                      onChange={(e) => setLimitInput(e.target.value)}
+                                      className="w-24 px-2 py-1 rounded bg-black/20 border border-white/10 text-white text-xs"
+                                      autoFocus
+                                      onKeyDown={(e) => e.key === "Enter" && saveLimit()}
+                                    />
+                                    <button onClick={saveLimit} className="p-1 rounded bg-emerald-600 hover:bg-emerald-500"><Check className="w-3 h-3" /></button>
+                                    <button onClick={() => setEditingLimitId(null)} className="p-1 rounded bg-white/10 hover:bg-white/15"><X className="w-3 h-3" /></button>
+                                  </span>
+                                ) : (
+                                  <button onClick={() => openLimitEditor(Number(row.id.replace("card-", "")))} className="p-1 rounded hover:bg-white/10 text-white/70 hover:text-white">
+                                    <Pencil className="w-3.5 h-3.5" />
+                                  </button>
+                                )
+                              )}
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 text-right">{row.total > 0 ? fmt(row.total) : "—"}</td>
+                          <td className="px-4 py-3 text-right">{fmt(row.used)}</td>
+                          <td className={`px-4 py-3 text-right font-semibold ${row.available >= 0 ? "text-emerald-200" : "text-red-200"}`}>{row.total > 0 ? fmt(row.available) : "—"}</td>
+                        </tr>
+                      ))}
+                      {loanLimitRows.map((row) => (
+                        <tr key={row.id} className="border-t border-white/10 text-white">
+                          <td className="px-4 py-3">{row.label}</td>
+                          <td className="px-4 py-3 text-right">{fmt(row.total)}</td>
+                          <td className="px-4 py-3 text-right">{fmt(row.used)}</td>
+                          <td className="px-4 py-3 text-right font-semibold text-emerald-200">{fmt(row.available)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+
+              <section className="rounded-2xl border border-[#6d1d4f] bg-[#741b4d] overflow-hidden">
+                <div className="px-5 py-4 border-b border-white/10">
+                  <h2 className="text-white font-bold">Fatura parcelas / dívida restante</h2>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-[#6a1546] text-white">
+                      <tr>
+                        <th className="px-4 py-3 text-left">Tipo</th>
+                        <th className="px-4 py-3 text-right">Fatura parcelas</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {outstandingByType.map((row) => (
+                        <tr key={row.label} className="border-t border-white/10 text-white">
+                          <td className="px-4 py-3">{row.label}</td>
+                          <td className="px-4 py-3 text-right">{fmt(row.total)}</td>
+                        </tr>
+                      ))}
+                      <tr className="border-t border-white/10 text-white font-semibold bg-black/10">
+                        <td className="px-4 py-3">Totais por coluna</td>
+                        <td className="px-4 py-3 text-right">{fmt(outstandingByType.reduce((sum, row) => sum + row.total, 0))}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </section>
             </div>
-          ) : (
-            <>
-              {/* ===== CARD TABS ===== */}
-              <div className="flex gap-3 flex-wrap">
-                {cards.map((c) => (
-                  <button key={c.id} onClick={() => setSelectedCard(c.id)}
-                    className={`flex items-center gap-3 px-4 py-3 rounded-xl border transition ${
-                      selectedCard === c.id
-                        ? "border-current text-white"
-                        : "border-gray-800 text-gray-400 hover:border-gray-700"
-                    }`}
-                    style={selectedCard === c.id ? { borderColor: c.color, backgroundColor: `${c.color}22` } : {}}>
-                    <span className="text-xl">{c.icon}</span>
-                    <div className="text-left">
-                      <p className="text-sm font-semibold leading-none">{c.bank_name}</p>
-                      <p className="text-xs text-gray-500 mt-0.5">{c.card_name} · fecha dia {c.closing_day}</p>
-                    </div>
-                  </button>
-                ))}
+
+            <section className="rounded-2xl border border-white/10 bg-[#2b2b2b] overflow-hidden">
+              <div className="px-5 py-4 border-b border-white/10">
+                <h2 className="text-white font-bold">Geral</h2>
               </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm min-w-[540px]">
+                  <thead className="bg-[#3b3b3b] text-white">
+                    <tr>
+                      <th className="px-4 py-3 text-left">Ano</th>
+                      <th className="px-4 py-3 text-left">Mês</th>
+                      <th className="px-4 py-3 text-right">Comprometidos</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {consolidatedMonthRows.map((row, index) => (
+                      <tr key={row.label} className="border-t border-white/10 text-gray-100">
+                        <td className="px-4 py-3">{index === 0 ? viewYear : ""}</td>
+                        <td className="px-4 py-3">{row.label.toLowerCase()}</td>
+                        <td className="px-4 py-3 text-right font-medium">{fmt(row.total)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          </div>
 
-              {/* ===== MONTHLY TABLE ===== */}
-              {card && (
-                <div className="bg-gray-900 rounded-2xl border border-gray-800 overflow-hidden">
-                  <div className="px-6 py-4 border-b border-gray-800 flex items-center justify-between">
-                    <div>
-                      <h2 className="text-base font-bold text-white flex items-center gap-2">
-                        <span style={{ color: card.color }}>{card.icon}</span>
-                        {card.bank_name} · {card.card_name}
-                      </h2>
-                      <p className="text-xs text-gray-500 mt-1">Fatura fecha dia {card.closing_day} · Vence dia {card.due_day}</p>
-                    </div>
-                    <div className="text-right text-xs text-gray-500 space-y-1">
-                      <p>Total ano: <span className="font-bold text-red-400">{fmt(totalFatura + totalAssinaturas + totalVariavel)}</span></p>
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+            {cards.map((card) => {
+              const rows = cardMonthlyRows[card.id] || [];
+              const annualTotal = rows.reduce((sum, row) => sum + row.total, 0);
+              const currentMonthTotal = rows[new Date().getMonth()]?.total || 0;
+              return (
+                <section key={card.id} className="rounded-2xl overflow-hidden border border-white/10" style={{ backgroundColor: `${card.color}22` }}>
+                  <div className="px-5 py-4 border-b border-white/10 text-white" style={{ backgroundColor: `${card.color}cc` }}>
+                    <div className="flex items-center justify-between gap-4 flex-wrap">
+                      <div>
+                        <h2 className="font-bold">{card.bank_name.toLowerCase()} cartão - {fmt(annualTotal)}</h2>
+                        <p className="text-xs text-white/80 mt-1">{card.card_name} · fecha dia {card.closing_day} · vence dia {card.due_day}</p>
+                      </div>
+                      <div className="text-right text-xs text-white/80">
+                        <p>Atual: <strong className="text-white">{fmt(currentMonthTotal)}</strong></p>
+                        <p>Limite manual: <strong className="text-white">{cardLimits[String(card.id)] ? fmt(cardLimits[String(card.id)]) : "—"}</strong></p>
+                      </div>
                     </div>
                   </div>
-
-                  <div className="flex gap-4 px-6 py-3 border-b border-gray-800 bg-gray-900/50">
-                    <div className="flex items-center gap-1.5 text-xs text-gray-400"><span className="w-2 h-2 rounded-full bg-purple-400" />Fatura Atual</div>
-                    <div className="flex items-center gap-1.5 text-xs text-gray-400"><span className="w-2 h-2 rounded-full bg-emerald-400" />Assinaturas</div>
-                  </div>
-
                   <div className="overflow-x-auto">
-                    <table className="w-full">
-                      <thead>
-                        <tr className="border-b border-gray-800">
-                          <th className="text-left px-4 py-3 text-xs text-gray-500 font-medium w-32">Mês</th>
-                          <th className="text-right px-3 py-3 text-xs text-gray-500 font-medium">Fatura</th>
-                          <th className="text-right px-3 py-3 text-xs text-gray-500 font-medium">Assinaturas</th>
-                          <th className="text-right px-4 py-3 text-xs text-gray-500 font-medium">Total Mês</th>
-                          <th className="px-4 py-3 w-32"></th>
+                    <table className="w-full text-sm min-w-[540px]">
+                      <thead className="bg-black/20 text-white">
+                        <tr>
+                          <th className="px-4 py-3 text-left">Mês</th>
+                          <th className="px-4 py-3 text-right">Fatura Atual</th>
+                          <th className="px-4 py-3 text-right">Gastos Variáveis</th>
+                          <th className="px-4 py-3 text-right">Assinaturas</th>
+                          <th className="px-4 py-3 text-right">Total Mensal Previsto</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {monthlyData.map((d) => {
-                          const isCurrent = d.month === currentMonth && viewYear === currentYear;
-                          const barPct = (d.total / maxTotal) * 100;
-                          return (
-                            <tr key={d.month}
-                              className={`border-b border-gray-800/50 transition hover:bg-gray-800/30 ${isCurrent ? "bg-purple-900/10" : ""}`}>
-                              <td className="px-4 py-3">
-                                <div className="flex items-center gap-2">
-                                  <span className="text-sm font-medium text-gray-200">{d.label}</span>
-                                  {isCurrent && <span className="text-xs bg-purple-600 text-white px-2 py-0.5 rounded-full">Atual</span>}
-                                </div>
-                              </td>
-                              <td className="text-right px-3 py-3">
-                                <span className={`text-sm ${d.fatura > 0 ? "text-purple-300 font-medium" : "text-gray-600"}`}>
-                                  {d.fatura > 0 ? fmt(d.fatura) : "—"}
-                                </span>
-                              </td>
-                              <td className="text-right px-3 py-3">
-                                <span className={`text-sm ${d.assinaturas > 0 ? "text-emerald-300 font-medium" : "text-gray-600"}`}>
-                                  {d.assinaturas > 0 ? fmt(d.assinaturas) : "—"}
-                                </span>
-                              </td>
-                              <td className="text-right px-4 py-3">
-                                <span className={`text-sm font-bold ${d.total > 0 ? "text-red-400" : "text-gray-600"}`}>
-                                  {d.total > 0 ? fmt(d.total) : "—"}
-                                </span>
-                              </td>
-                              <td className="px-4 py-3">
-                                {d.total > 0 && (
-                                  <div className="h-2 bg-gray-800 rounded-full overflow-hidden w-20">
-                                    <div className="h-full rounded-full"
-                                      style={{
-                                        width: `${barPct}%`,
-                                        background: `linear-gradient(90deg, ${card.color}aa, ${card.color})`,
-                                      }} />
-                                  </div>
-                                )}
-                              </td>
-                            </tr>
-                          );
-                        })}
+                        {rows.map((row) => (
+                          <tr key={`${card.id}-${row.month}`} className="border-t border-white/10 text-white">
+                            <td className="px-4 py-3">{row.label}</td>
+                            <td className="px-4 py-3 text-right">{row.fatura > 0 ? fmt(row.fatura) : "R$ 0,00"}</td>
+                            <td className="px-4 py-3 text-right">{fmt(row.variavel)}</td>
+                            <td className="px-4 py-3 text-right">{row.assinaturas > 0 ? fmt(row.assinaturas) : "R$ 0,00"}</td>
+                            <td className="px-4 py-3 text-right font-semibold">{fmt(row.total)}</td>
+                          </tr>
+                        ))}
                       </tbody>
-                      <tfoot>
-                        <tr className="border-t-2 border-gray-700 bg-gray-800/30">
-                          <td className="px-4 py-3 text-sm font-bold text-gray-300">TOTAL ANO</td>
-                          <td className="text-right px-3 py-3 text-sm font-bold text-purple-300">{fmt(totalFatura)}</td>
-                          <td className="text-right px-3 py-3 text-sm font-bold text-emerald-300">{fmt(totalAssinaturas)}</td>
-                          <td className="text-right px-4 py-3 text-sm font-bold text-red-400">{fmt(totalFatura + totalAssinaturas)}</td>
-                          <td />
-                        </tr>
-                      </tfoot>
                     </table>
                   </div>
-                </div>
-              )}
+                </section>
+              );
+            })}
+          </div>
 
-              {/* ===== ACTIVE INSTALLMENTS ===== */}
-              {installments.length > 0 && card && (
-                <div className="bg-gray-900 rounded-2xl border border-gray-800 overflow-hidden">
-                  <div className="px-6 py-4 border-b border-gray-800">
-                    <h3 className="text-base font-bold text-white">Parcelamentos Ativos — {card.bank_name}</h3>
-                    <p className="text-xs text-gray-500 mt-1">Compras parceladas em andamento</p>
-                  </div>
-                  <div className="divide-y divide-gray-800">
-                    {installments.map((inst) => {
-                      const pct = (inst.paid_installments / inst.total_installments) * 100;
-                      const remainingTotal = inst.remaining_installments * inst.monthly_amount;
-                      return (
-                        <div key={inst.id} className="px-6 py-4">
-                          <div className="flex items-start justify-between gap-4">
-                            <div className="flex-1">
-                              <div className="flex items-center gap-3">
-                                <p className="text-sm font-semibold text-white">{inst.description}</p>
-                                <span className="text-xs bg-gray-800 text-gray-400 px-2 py-0.5 rounded-full">
-                                  {inst.paid_installments}/{inst.total_installments}x
-                                </span>
-                                <span className="text-xs text-emerald-400 bg-emerald-900/30 px-2 py-0.5 rounded-full">
-                                  {inst.remaining_installments} restantes
-                                </span>
-                              </div>
-                              <div className="mt-2 h-2 bg-gray-800 rounded-full overflow-hidden w-full max-w-xs">
-                                <div className="h-full bg-purple-500 rounded-full transition-all" style={{ width: `${pct}%` }} />
-                              </div>
-                            </div>
-                            <div className="text-right flex-shrink-0">
-                              <p className="text-sm font-bold text-purple-300">{fmt(inst.monthly_amount)}/mês</p>
-                              <p className="text-xs text-gray-500">Falta {fmt(remainingTotal)}</p>
-                            </div>
-                          </div>
+          {loans.length > 0 && (
+            <section className="rounded-2xl overflow-hidden border border-white/10 bg-[#321212]">
+              <div className="px-5 py-4 border-b border-white/10 flex items-center gap-2 text-white">
+                <Landmark className="w-4 h-4 text-red-300" />
+                <h2 className="font-bold">Empréstimos</h2>
+              </div>
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 p-5">
+                {loans.map((loan) => (
+                  <div key={loan.id} className="rounded-2xl border border-white/10 bg-black/10 overflow-hidden">
+                    <div className="px-4 py-3 border-b border-white/10 text-white">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <h3 className="font-semibold">{loan.name}</h3>
+                          <p className="text-xs text-white/70">{loan.bank_name || "Banco"} · vence dia {loan.due_day}</p>
                         </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
-              {/* ===== LOANS SECTION ===== */}
-              {loans.length > 0 && (
-                <div className="bg-gray-900 rounded-2xl border border-gray-800 overflow-hidden">
-                  <div className="px-6 py-4 border-b border-gray-800">
-                    <h3 className="text-base font-bold text-white flex items-center gap-2">
-                      <Landmark className="w-4 h-4 text-red-400" />
-                      Empréstimos Ativos
-                    </h3>
-                    <p className="text-xs text-gray-500 mt-1">Cronograma de parcelas restantes</p>
-                  </div>
-                  <div className="p-6 space-y-6">
-                    {loans.map((loan) => {
-                      const schedule = loanSchedules[loan.id] || [];
-                      const remainingTotal = loan.remaining_installments * loan.installment_amount;
-                      const pct = (loan.paid_installments / loan.total_installments) * 100;
-                      return (
-                        <div key={loan.id} className="space-y-3">
-                          <div className="flex items-center justify-between">
-                            <div>
-                              <p className="text-sm font-bold text-white">{loan.name}</p>
-                              <p className="text-xs text-gray-500">{loan.bank_name || "Banco"} · Vence dia {loan.due_day}</p>
-                            </div>
-                            <div className="text-right">
-                              <p className="text-sm font-bold text-red-400">{fmt(loan.installment_amount)}/mês</p>
-                              <p className="text-xs text-gray-500">{loan.remaining_installments} parcelas restantes · {fmt(remainingTotal)} total</p>
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-3">
-                            <div className="flex-1 h-3 bg-gray-800 rounded-full overflow-hidden">
-                              <div className="h-full bg-gradient-to-r from-red-600 to-red-400 rounded-full"
-                                style={{ width: `${pct}%` }} />
-                            </div>
-                            <span className="text-xs text-gray-400 w-12 text-right">
-                              {loan.paid_installments}/{loan.total_installments}
-                            </span>
-                          </div>
-                          {schedule.length > 0 && (
-                            <div className="overflow-x-auto">
-                              <div className="flex gap-2 pb-1" style={{ minWidth: "max-content" }}>
-                                {schedule.map((item, i) => {
-                                  const isCurrentMonth = item.month === currentMonth && item.year === currentYear;
-                                  return (
-                                    <div key={i}
-                                      className={`flex-shrink-0 text-center px-3 py-2 rounded-xl border text-xs transition ${
-                                        isCurrentMonth
-                                          ? "bg-red-900/30 border-red-600 text-red-300"
-                                          : "bg-gray-800 border-gray-700 text-gray-400"
-                                      }`}
-                                      style={{ minWidth: "72px" }}>
-                                      <p className="font-semibold">{item.month_name}/{item.year}</p>
-                                      <p className="text-red-400 font-bold mt-0.5">{fmt(item.amount)}</p>
-                                      <p className="text-gray-600 text-xs">Parc. {item.installment_number}</p>
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
-              {/* ===== SUBSCRIPTIONS ===== */}
-              {subscriptions.filter(s => s.is_active).length > 0 && card && (
-                <div className="bg-gray-900 rounded-2xl border border-gray-800 overflow-hidden">
-                  <div className="px-6 py-4 border-b border-gray-800">
-                    <h3 className="text-base font-bold text-white">Assinaturas — {card.bank_name}</h3>
-                    <p className="text-xs text-gray-500 mt-1">
-                      Total: {fmt(subscriptions.filter((s) => s.is_active).reduce((s, sub) => s + sub.monthly_amount, 0))}/mês
-                    </p>
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 p-6">
-                    {subscriptions.map((sub) => (
-                      <div key={sub.id} className={`flex items-center justify-between p-3 rounded-xl border ${
-                        sub.is_active ? "bg-gray-800 border-gray-700" : "bg-gray-900 border-gray-800 opacity-50"
-                      }`}>
-                        <div className="flex items-center gap-2">
-                          <span className={`w-2 h-2 rounded-full ${sub.is_active ? "bg-emerald-400" : "bg-gray-600"}`} />
-                          <span className="text-sm text-gray-200">{sub.description}</span>
-                        </div>
-                        <span className="text-sm font-bold text-emerald-300">{fmt(sub.monthly_amount)}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* ===== ALL CARDS SUMMARY ===== */}
-              {cards.length > 1 && (
-                <div className="bg-gray-900 rounded-2xl border border-gray-800 overflow-hidden">
-                  <div className="px-6 py-4 border-b border-gray-800">
-                    <h3 className="text-base font-bold text-white flex items-center gap-2">
-                      <Calendar className="w-4 h-4 text-blue-400" />
-                      Resumo Consolidado
-                    </h3>
-                  </div>
-                  <div className="p-6 grid grid-cols-1 sm:grid-cols-3 gap-4">
-                    {cards.map((c) => (
-                      <div key={c.id} className="bg-gray-800 rounded-xl p-4 border border-gray-700">
-                        <div className="flex items-center gap-2 mb-3">
-                          <span className="text-xl">{c.icon}</span>
-                          <div>
-                            <p className="text-sm font-bold text-white">{c.bank_name}</p>
-                            <p className="text-xs text-gray-500">{c.card_name}</p>
-                          </div>
+                        <div className="text-right text-xs text-white/70">
+                          <p>Total: <strong className="text-white">{fmt(loan.total_amount)}</strong></p>
+                          <p>Restante: <strong className="text-white">{fmt(loan.remaining_installments * loan.installment_amount)}</strong></p>
                         </div>
                       </div>
-                    ))}
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm min-w-[420px]">
+                        <thead className="bg-black/20 text-white">
+                          <tr>
+                            <th className="px-4 py-3 text-left">Mês</th>
+                            <th className="px-4 py-3 text-right">Parcela</th>
+                            <th className="px-4 py-3 text-right">Número</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(loanSchedules[loan.id] || []).filter((item) => item.year === viewYear).map((item) => (
+                            <tr key={`${loan.id}-${item.year}-${item.month}-${item.installment_number}`} className="border-t border-white/10 text-white">
+                              <td className="px-4 py-3">{item.month_name}/{item.year}</td>
+                              <td className="px-4 py-3 text-right">{fmt(item.amount)}</td>
+                              <td className="px-4 py-3 text-right">{item.installment_number}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
-                </div>
-              )}
-            </>
+                ))}
+              </div>
+            </section>
           )}
         </div>
       </div>
