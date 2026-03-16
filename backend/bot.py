@@ -97,7 +97,12 @@ def find_category(text: str, db) -> Category:
                 ).first()
                 if cat:
                     return cat
-    return db.query(Category).filter(Category.name == "Outros").first()
+
+    cat = db.query(Category).filter(Category.name == "Outros").first()
+    if cat:
+        return cat
+
+    return db.query(Category).order_by(Category.id.asc()).first()
 
 
 def parse_message(text: str) -> dict | None:
@@ -408,7 +413,7 @@ def main():
     print("   Envie /start no Telegram para começar.")
     print("   Pressione Ctrl+C para parar.\n")
 
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    app.run_polling(allowed_updates=Update.ALL_TYPES, stop_signals=None)
 
 
 if __name__ == "__main__":

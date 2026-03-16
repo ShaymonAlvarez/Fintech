@@ -56,6 +56,11 @@ DEFAULT_CATEGORIES = [
     {"name": "Cartões Gastos",  "icon": "💳", "color": "#6366F1"},
     {"name": "Empréstimos",     "icon": "🏦", "color": "#DC2626"},
     {"name": "Investimentos",   "icon": "📈", "color": "#10B981"},
+    {"name": "Alimentação",     "icon": "🍔", "color": "#F97316"},
+    {"name": "Transporte",      "icon": "🚗", "color": "#F59E0B"},
+    {"name": "Moradia",         "icon": "🏠", "color": "#14B8A6"},
+    {"name": "Educação",        "icon": "🎓", "color": "#8B5CF6"},
+    {"name": "Vestuário",       "icon": "👔", "color": "#EC4899"},
     {"name": "Uber/99/Taxi",    "icon": "🚕", "color": "#F59E0B"},
     {"name": "Restaurante",     "icon": "🍽️", "color": "#EF4444"},
     {"name": "Mercados/Feiras", "icon": "🛒", "color": "#84CC16"},
@@ -69,6 +74,7 @@ DEFAULT_CATEGORIES = [
     {"name": "E-Commerce",      "icon": "📦", "color": "#F97316"},
     {"name": "Renda",           "icon": "💰", "color": "#22C55E"},
     {"name": "Ajuda",           "icon": "❤️",  "color": "#F43F5E"},
+    {"name": "Outros",          "icon": "📦", "color": "#6B7280"},
 ]
 
 
