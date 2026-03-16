@@ -261,6 +261,7 @@ def create_transaction(
         description=data.description,
         category_id=data.category_id,
         user_id=current_user.id,
+        created_at=data.created_at or datetime.utcnow(),
     )
     db.add(transaction)
     db.commit()

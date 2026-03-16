@@ -56,6 +56,7 @@ class TransactionCreate(BaseModel):
     type: str  # "income" ou "expense"
     description: str = ""
     category_id: Optional[int] = None
+    created_at: Optional[datetime] = None
 
 
 class TransactionResponse(BaseModel):

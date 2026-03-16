@@ -12,7 +12,7 @@ Uso:
 """
 
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 from telegram import Update, BotCommand
@@ -89,8 +89,13 @@ def is_authorized(user_id: int) -> bool:
     return user_id in ALLOWED_TELEGRAM_IDS
 
 
-def find_category(text: str, db) -> Category:
+def find_category(text: str, db, explicit_category: str | None = None) -> Category:
     """Encontra a categoria mais relevante baseada no texto."""
+    if explicit_category:
+        cat = db.query(Category).filter(Category.name.ilike(explicit_category)).first()
+        if cat:
+            return cat
+
     text_lower = text.lower()
     for cat_name, keywords in CATEGORY_KEYWORDS.items():
         for keyword in keywords:
@@ -106,6 +111,31 @@ def find_category(text: str, db) -> Category:
         return cat
 
     return db.query(Category).order_by(Category.id.asc()).first()
+
+
+def _parse_target_date(raw_value: str) -> datetime | None:
+    now = datetime.utcnow()
+    value = raw_value.strip().lower()
+
+    if value == "hoje":
+        return now.replace(hour=12, minute=0, second=0, microsecond=0)
+    if value == "amanha":
+        target = now + timedelta(days=1)
+        return target.replace(hour=12, minute=0, second=0, microsecond=0)
+
+    try:
+        if re.fullmatch(r"\d{1,2}", value):
+            return now.replace(day=int(value), hour=12, minute=0, second=0, microsecond=0)
+        if re.fullmatch(r"\d{1,2}/\d{1,2}", value):
+            day, month = map(int, value.split("/"))
+            return datetime(now.year, month, day, 12, 0, 0)
+        if re.fullmatch(r"\d{1,2}/\d{1,2}/\d{4}", value):
+            day, month, year = map(int, value.split("/"))
+            return datetime(year, month, day, 12, 0, 0)
+    except ValueError:
+        return None
+
+    return None
 
 
 def parse_message(text: str) -> dict | None:
@@ -127,10 +157,26 @@ def parse_message(text: str) -> dict | None:
     amount = float(match.group(2).replace(",", "."))
     description = (match.group(3) or "").strip()
 
+    explicit_category = None
+    date_match = re.search(r"@([^#]+)$", description)
+    if date_match:
+        date_value = date_match.group(1).strip()
+        created_at = _parse_target_date(date_value)
+        description = description[:date_match.start()].strip()
+    else:
+        created_at = None
+
+    category_match = re.search(r"#([^@]+)", description)
+    if category_match:
+        explicit_category = category_match.group(1).strip()
+        description = (description[:category_match.start()] + description[category_match.end():]).strip()
+
     return {
         "type": "income" if sign == "+" else "expense",
         "amount": amount,
         "description": description,
+        "explicit_category": explicit_category,
+        "created_at": created_at,
     }
 
 
@@ -153,6 +199,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📥 *Receita:* `+150 salário`\n"
         "📤 *Despesa:* `-45.90 mercado`\n"
         "📤 *Com categoria:* `-25 uber transporte`\n\n"
+        "📅 *Com data:* `-45 mercado @20/03`\n"
+        "🏷️ *Categoria explícita:* `-35 almoço #Restaurante`\n\n"
         "📋 *Comandos disponíveis:*\n"
         "/resumo — Resumo do mês\n"
         "/saldo — Saldo total\n"
@@ -193,7 +241,7 @@ async def handle_transaction(update: Update, context: ContextTypes.DEFAULT_TYPE)
             )
             return
 
-        category = find_category(parsed["description"], db)
+        category = find_category(parsed["description"], db, parsed.get("explicit_category"))
 
         transaction = Transaction(
             amount=parsed["amount"],
@@ -201,6 +249,7 @@ async def handle_transaction(update: Update, context: ContextTypes.DEFAULT_TYPE)
             description=parsed["description"],
             category_id=category.id if category else None,
             user_id=user.id,
+            created_at=parsed.get("created_at") or datetime.utcnow(),
         )
         db.add(transaction)
         db.commit()
@@ -214,7 +263,8 @@ async def handle_transaction(update: Update, context: ContextTypes.DEFAULT_TYPE)
             f"{emoji} *{type_label} registrada!*\n\n"
             f"💵 Valor: R$ {parsed['amount']:.2f}\n"
             f"📝 Descrição: {parsed['description'] or 'N/A'}\n"
-            f"{cat_icon} Categoria: {cat_name}",
+            f"{cat_icon} Categoria: {cat_name}\n"
+            f"📅 Data: {(parsed.get('created_at') or transaction.created_at).strftime('%d/%m/%Y')}",
             parse_mode="Markdown",
         )
     finally:
