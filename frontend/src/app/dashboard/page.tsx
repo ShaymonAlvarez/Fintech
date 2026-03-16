@@ -6,6 +6,8 @@ import {
   Menu,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
+  ChevronUp,
   Plus,
   X,
   Wallet,
@@ -13,6 +15,7 @@ import {
   Sparkles,
   CreditCard,
   PiggyBank,
+  Users,
 } from "lucide-react";
 import Sidebar from "@/components/Sidebar";
 import SalaryModal from "@/components/SalaryModal";
@@ -33,6 +36,8 @@ const MONTHS = [
   "Dezembro",
 ];
 
+type PanelKey = "summary" | "scenarios" | "vrva" | "partner" | "cards" | "daily";
+
 interface Summary {
   total_income: number;
   total_expense: number;
@@ -43,10 +48,7 @@ interface Summary {
 interface CategoryData {
   category_id: number;
   category_name: string;
-  category_icon: string;
-  category_color: string;
   total: number;
-  percentage: number;
 }
 
 interface Transaction {
@@ -54,8 +56,6 @@ interface Transaction {
   amount: number;
   type: string;
   description: string;
-  category_id: number | null;
-  user_id: number;
   created_at: string;
   category: {
     id: number;
@@ -146,6 +146,16 @@ interface Loan {
   remaining_installments: number;
 }
 
+interface PartnerExpense {
+  id: number;
+  description: string;
+  amount: number;
+  source: string | null;
+  note: string | null;
+  charge_date: string;
+  is_paid: boolean;
+}
+
 interface PlannerCardRow {
   id: string;
   title: string;
@@ -166,6 +176,42 @@ function ymd(date: Date) {
   return date.toISOString().slice(0, 10);
 }
 
+function dayLabel(date: string) {
+  return `${date.slice(8, 10)}/${date.slice(5, 7)}`;
+}
+
+function SectionShell({
+  title,
+  icon,
+  open,
+  onToggle,
+  actions,
+  children,
+  className = "bg-[#1a1a2e] border border-white/10",
+}: {
+  title: string;
+  icon: React.ReactNode;
+  open: boolean;
+  onToggle: () => void;
+  actions?: React.ReactNode;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <section className={`rounded-2xl overflow-hidden ${className}`}>
+      <div className="px-4 sm:px-6 py-4 border-b border-white/10 flex items-center justify-between gap-3">
+        <button onClick={onToggle} className="flex items-center gap-2 min-w-0 text-left">
+          {icon}
+          <h3 className="text-base sm:text-lg font-semibold text-white truncate">{title}</h3>
+          {open ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
+        </button>
+        {actions}
+      </div>
+      {open && children}
+    </section>
+  );
+}
+
 export default function DashboardPage() {
   const router = useRouter();
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -183,9 +229,11 @@ export default function DashboardPage() {
   const [installments, setInstallments] = useState<CardInstallment[]>([]);
   const [subscriptions, setSubscriptions] = useState<CardSubscription[]>([]);
   const [loans, setLoans] = useState<Loan[]>([]);
+  const [partnerExpenses, setPartnerExpenses] = useState<PartnerExpense[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
   const [showSalaryModal, setShowSalaryModal] = useState(false);
+  const [showPartnerModal, setShowPartnerModal] = useState(false);
 
   const [newAmount, setNewAmount] = useState("");
   const [newType, setNewType] = useState("expense");
@@ -193,11 +241,28 @@ export default function DashboardPage() {
   const [newCategoryId, setNewCategoryId] = useState("");
   const [newDate, setNewDate] = useState(ymd(new Date()));
 
+  const [partnerDescription, setPartnerDescription] = useState("");
+  const [partnerAmount, setPartnerAmount] = useState("");
+  const [partnerSource, setPartnerSource] = useState("");
+  const [partnerNote, setPartnerNote] = useState("");
+  const [partnerDate, setPartnerDate] = useState(ymd(new Date()));
+  const [partnerPaid, setPartnerPaid] = useState(false);
+
+  const [panelOpen, setPanelOpen] = useState<Record<PanelKey, boolean>>({
+    summary: true,
+    scenarios: true,
+    vrva: true,
+    partner: true,
+    cards: true,
+    daily: true,
+  });
+  const [openDays, setOpenDays] = useState<Record<string, boolean>>({});
+
   const loadData = useCallback(async () => {
     setLoading(true);
 
     try {
-      const [s, c, t, cats, b, salaryCfg, scen, flow, cardList, loanList] = await Promise.all([
+      const [s, c, t, cats, b, salaryCfg, scen, flow, cardList, loanList, partnerList] = await Promise.all([
         api.get(`/reports/summary?month=${month}&year=${year}`),
         api.get(`/reports/by-category?month=${month}&year=${year}`),
         api.get(`/transactions?month=${month}&year=${year}&limit=500`),
@@ -208,6 +273,7 @@ export default function DashboardPage() {
         api.get(`/daily-flow?month=${month}&year=${year}`),
         api.get("/cards"),
         api.get("/loans"),
+        api.get(`/partner-expenses?month=${month}&year=${year}`).catch(() => []),
       ]);
 
       let allInstallments: CardInstallment[] = [];
@@ -240,6 +306,12 @@ export default function DashboardPage() {
       setInstallments(allInstallments);
       setSubscriptions(allSubscriptions);
       setLoans(loanList);
+      setPartnerExpenses(partnerList);
+      setOpenDays(
+        Object.fromEntries(
+          (flow as DailyFlowItem[]).map((day) => [day.date, day.is_today])
+        )
+      );
     } catch (error: unknown) {
       const err = error as { status?: number };
       if (err.status === 401) {
@@ -306,11 +378,10 @@ export default function DashboardPage() {
           budget,
           actual,
           plannedScenario,
-          totalWithScenarios: actual + plannedScenario,
         };
       })
       .filter((row) => row.budget > 0 || row.actual > 0 || row.plannedScenario > 0)
-      .sort((a, b) => b.totalWithScenarios - a.totalWithScenarios);
+      .sort((a, b) => (b.actual + b.plannedScenario) - (a.actual + a.plannedScenario));
   }, [categories, categoryData, scenarioByCategory, budgetMap]);
 
   const vrvaRows = useMemo(() => {
@@ -377,10 +448,48 @@ export default function DashboardPage() {
     return rows.sort((a, b) => b.amount - a.amount);
   }, [installments, subscriptions, loans, cards, year, month]);
 
+  const allPanelsExpanded = Object.values(panelOpen).every(Boolean);
+  const allDaysExpanded = dailyFlow.length > 0 && dailyFlow.every((day) => openDays[day.date]);
+
+  const togglePanel = (panel: PanelKey) => {
+    setPanelOpen((current) => ({ ...current, [panel]: !current[panel] }));
+  };
+
+  const toggleAllPanels = () => {
+    const next = !allPanelsExpanded;
+    setPanelOpen({
+      summary: next,
+      scenarios: next,
+      vrva: next,
+      partner: next,
+      cards: next,
+      daily: next,
+    });
+  };
+
+  const toggleDay = (date: string) => {
+    setOpenDays((current) => ({ ...current, [date]: !current[date] }));
+  };
+
+  const toggleAllDays = () => {
+    const next = !allDaysExpanded;
+    setOpenDays(Object.fromEntries(dailyFlow.map((day) => [day.date, next])));
+  };
+
   const handleDeleteTransaction = async (id: number) => {
     if (!confirm("Remover esta transação?")) return;
     try {
       await api.delete(`/transactions/${id}`);
+      loadData();
+    } catch (error) {
+      console.error("Erro ao remover:", error);
+    }
+  };
+
+  const handleDeletePartner = async (id: number) => {
+    if (!confirm("Remover este lançamento?")) return;
+    try {
+      await api.delete(`/partner-expenses/${id}`);
       loadData();
     } catch (error) {
       console.error("Erro ao remover:", error);
@@ -409,6 +518,30 @@ export default function DashboardPage() {
     }
   };
 
+  const handleAddPartnerExpense = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      await api.post("/partner-expenses", {
+        description: partnerDescription,
+        amount: parseFloat(partnerAmount),
+        source: partnerSource || null,
+        note: partnerNote || null,
+        charge_date: partnerDate ? `${partnerDate}T12:00:00` : null,
+        is_paid: partnerPaid,
+      });
+      setShowPartnerModal(false);
+      setPartnerDescription("");
+      setPartnerAmount("");
+      setPartnerSource("");
+      setPartnerNote("");
+      setPartnerDate(ymd(new Date()));
+      setPartnerPaid(false);
+      loadData();
+    } catch (error) {
+      console.error("Erro ao adicionar lançamento da esposa:", error);
+    }
+  };
+
   const prevMonth = () => {
     if (month === 1) {
       setMonth(12);
@@ -434,16 +567,15 @@ export default function DashboardPage() {
       <main className="flex-1 min-w-0">
         <header className="sticky top-0 z-30 bg-[#0a0a1a]/90 backdrop-blur-xl border-b border-white/5 px-4 lg:px-8 py-4">
           <div className="flex items-center justify-between gap-3 flex-wrap">
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-4 min-w-0">
               <button onClick={() => setSidebarOpen(true)} className="lg:hidden p-2 rounded-xl hover:bg-white/5 text-gray-400">
                 <Menu className="w-5 h-5" />
               </button>
-
-              <div className="flex items-center gap-2 sm:gap-3">
+              <div className="flex items-center gap-1 sm:gap-3 min-w-0">
                 <button onClick={prevMonth} className="p-2 rounded-xl hover:bg-white/5 text-gray-400 hover:text-white transition-colors">
                   <ChevronLeft className="w-5 h-5" />
                 </button>
-                <h2 className="text-base sm:text-lg font-semibold text-white min-w-[170px] text-center">
+                <h2 className="text-sm sm:text-lg font-semibold text-white min-w-[150px] sm:min-w-[190px] text-center truncate">
                   {MONTHS[month - 1]} - {year}
                 </h2>
                 <button onClick={nextMonth} className="p-2 rounded-xl hover:bg-white/5 text-gray-400 hover:text-white transition-colors">
@@ -452,7 +584,10 @@ export default function DashboardPage() {
               </div>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap justify-end">
+              <button onClick={toggleAllPanels} className="px-3 py-2 rounded-xl border border-white/10 text-gray-300 text-sm hover:bg-white/5">
+                {allPanelsExpanded ? "Recolher painéis" : "Expandir painéis"}
+              </button>
               <button
                 onClick={() => setShowSalaryModal(true)}
                 className="flex items-center gap-2 px-3 py-2.5 rounded-xl border border-emerald-500/30 text-emerald-400 text-sm font-medium hover:bg-emerald-500/10 transition-all"
@@ -483,32 +618,35 @@ export default function DashboardPage() {
             </div>
           ) : (
             <>
-              <section className="rounded-3xl border border-red-500/20 bg-gradient-to-br from-[#5f0c05] via-[#4b0904] to-[#360603] overflow-hidden shadow-2xl shadow-red-950/40">
-                <div className="px-6 py-4 border-b border-white/10 text-center bg-cyan-500/20">
-                  <h1 className="text-2xl font-bold text-cyan-100">{MONTHS[month - 1].toLowerCase()} - {year}</h1>
+              <SectionShell
+                title="Painel mensal consolidado"
+                icon={<PiggyBank className="w-5 h-5 text-red-300" />}
+                open={panelOpen.summary}
+                onToggle={() => togglePanel("summary")}
+                className="border border-red-500/20 bg-gradient-to-br from-[#5f0c05] via-[#4b0904] to-[#360603]"
+              >
+                <div className="px-4 sm:px-6 py-4 border-t border-white/10 text-center bg-cyan-500/20">
+                  <h1 className="text-xl sm:text-2xl font-bold text-cyan-100">{MONTHS[month - 1].toLowerCase()} - {year}</h1>
                 </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-5 border-b border-white/10 text-sm">
+                <div className="grid grid-cols-1 md:grid-cols-5 border-t border-white/10 text-sm">
                   <div className="px-4 py-3 text-zinc-100 border-r border-white/10 md:col-span-2">Gasto por mês previsto / já comprometido:</div>
                   <div className="px-4 py-3 font-semibold text-white border-r border-white/10">{fmt(projectedBaseExpense)} / {fmt(projectedBaseExpense + totalScenario)}</div>
                   <div className="px-4 py-3 text-zinc-100 border-r border-white/10">O quanto ainda pode gastar:</div>
                   <div className={`px-4 py-3 font-semibold ${canStillSpend >= 0 ? "text-emerald-300" : "text-red-300"}`}>{fmt(canStillSpend)}</div>
                 </div>
-
-                <div className="grid grid-cols-1 xl:grid-cols-[220px,1fr,320px] gap-0">
+                <div className="grid grid-cols-1 xl:grid-cols-[220px,1fr,320px]">
                   <div className="bg-amber-800/80 p-6 flex flex-col justify-center border-r border-white/10 min-h-[220px]">
-                    <p className="text-4xl font-light text-amber-50 leading-tight">Metas -</p>
-                    <p className="text-4xl font-light text-amber-50 leading-tight">Salário:</p>
-                    <p className="text-5xl font-semibold text-amber-100 mt-2">{salaryTotal > 0 ? fmt(salaryTotal) : "—"}</p>
+                    <p className="text-3xl sm:text-4xl font-light text-amber-50 leading-tight">Metas -</p>
+                    <p className="text-3xl sm:text-4xl font-light text-amber-50 leading-tight">Salário:</p>
+                    <p className="text-4xl sm:text-5xl font-semibold text-amber-100 mt-2 break-words">{salaryTotal > 0 ? fmt(salaryTotal) : "—"}</p>
                     <div className="mt-4 space-y-2 text-sm text-amber-100/80">
                       <p>Saldo de entrada: {fmt(openingBalance)}</p>
                       <p>Saldo projetado: {fmt(projectedClosingWithScenarios)}</p>
                       <p>Referência atual: {fmt(summary?.balance || 0)}</p>
                     </div>
                   </div>
-
                   <div className="overflow-x-auto border-r border-white/10">
-                    <table className="w-full text-sm">
+                    <table className="w-full text-sm min-w-[520px]">
                       <thead>
                         <tr className="bg-amber-900/80 text-amber-50">
                           <th className="px-4 py-3 text-left">Categorias</th>
@@ -526,57 +664,31 @@ export default function DashboardPage() {
                             <td className="px-4 py-2.5 text-right">{row.plannedScenario > 0 ? fmt(row.plannedScenario) : "—"}</td>
                           </tr>
                         ))}
-                        <tr className="border-t border-white/10 bg-red-700/40 text-white font-semibold">
-                          <td className="px-4 py-3">Total dos meus gastos</td>
-                          <td className="px-4 py-3 text-right">{fmt(categoryRows.reduce((sum, row) => sum + row.budget, 0))}</td>
-                          <td className="px-4 py-3 text-right">{fmt(summary?.total_expense || 0)}</td>
-                          <td className="px-4 py-3 text-right">{fmt(totalScenario)}</td>
-                        </tr>
                       </tbody>
                     </table>
                   </div>
-
                   <div className="p-4 sm:p-6 bg-[#4d0c06]/60">
-                    <div className="flex items-center gap-2 text-amber-100 mb-4">
-                      <PiggyBank className="w-4 h-4" />
-                      <h3 className="font-semibold">Resumo do mês</h3>
-                    </div>
-                    <div className="space-y-3 text-sm">
-                      <div className="flex justify-between text-amber-50">
-                        <span>Receitas do mês</span>
-                        <span className="font-semibold">{fmt(summary?.total_income || 0)}</span>
-                      </div>
-                      <div className="flex justify-between text-amber-50">
-                        <span>Despesas realizadas</span>
-                        <span className="font-semibold">{fmt(summary?.total_expense || 0)}</span>
-                      </div>
-                      <div className="flex justify-between text-amber-50">
-                        <span>Planejado em cenários</span>
-                        <span className="font-semibold">{fmt(totalScenario)}</span>
-                      </div>
-                      <div className="flex justify-between text-amber-50">
-                        <span>Saldo no mês</span>
-                        <span className={`font-semibold ${(summary?.balance || 0) >= 0 ? "text-emerald-300" : "text-red-300"}`}>{fmt(summary?.balance || 0)}</span>
-                      </div>
-                      <div className="flex justify-between text-amber-50">
-                        <span>Saldo futuro previsto</span>
-                        <span className={`font-semibold ${projectedClosingWithScenarios >= 0 ? "text-emerald-300" : "text-red-300"}`}>{fmt(projectedClosingWithScenarios)}</span>
-                      </div>
-                      <div className="pt-3 border-t border-white/10 text-amber-100/80 text-xs">{scenarios.length} cenário(s) influenciando o mês · {summary?.transaction_count || 0} lançamento(s)</div>
+                    <div className="space-y-3 text-sm text-amber-50">
+                      <div className="flex justify-between"><span>Receitas do mês</span><span className="font-semibold">{fmt(summary?.total_income || 0)}</span></div>
+                      <div className="flex justify-between"><span>Despesas realizadas</span><span className="font-semibold">{fmt(summary?.total_expense || 0)}</span></div>
+                      <div className="flex justify-between"><span>Planejado em cenários</span><span className="font-semibold">{fmt(totalScenario)}</span></div>
+                      <div className="flex justify-between"><span>Saldo no mês</span><span className={`font-semibold ${(summary?.balance || 0) >= 0 ? "text-emerald-300" : "text-red-300"}`}>{fmt(summary?.balance || 0)}</span></div>
+                      <div className="flex justify-between"><span>Saldo futuro previsto</span><span className={`font-semibold ${projectedClosingWithScenarios >= 0 ? "text-emerald-300" : "text-red-300"}`}>{fmt(projectedClosingWithScenarios)}</span></div>
                     </div>
                   </div>
                 </div>
-              </section>
+              </SectionShell>
 
-              <section className="rounded-2xl bg-[#1a1a2e] border border-white/10 overflow-hidden">
-                <div className="px-6 py-4 border-b border-white/10 flex items-center gap-2">
-                  <Sparkles className="w-5 h-5 text-yellow-400" />
-                  <h3 className="text-lg font-semibold text-white">Cenários cadastrados para este mês</h3>
-                </div>
+              <SectionShell
+                title="Cenários cadastrados para este mês"
+                icon={<Sparkles className="w-5 h-5 text-yellow-400" />}
+                open={panelOpen.scenarios}
+                onToggle={() => togglePanel("scenarios")}
+              >
                 {scenarios.length === 0 ? (
                   <div className="px-6 py-8 text-sm text-gray-400">Nenhum cenário cadastrado para {MONTHS[month - 1]}.</div>
                 ) : (
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 p-6">
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 p-4 sm:p-6">
                     {scenarios.map((scenario) => (
                       <div key={scenario.id} className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
                         <div className="flex items-start justify-between gap-4">
@@ -597,19 +709,18 @@ export default function DashboardPage() {
                     ))}
                   </div>
                 )}
-              </section>
+              </SectionShell>
 
               <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-                <section className="rounded-2xl bg-[#1a1a2e] border border-white/10 overflow-hidden">
-                  <div className="px-6 py-4 border-b border-white/10 flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <Wallet className="w-5 h-5 text-emerald-400" />
-                      <h3 className="text-lg font-semibold text-white">VR / VA</h3>
-                    </div>
-                    <div className="text-sm text-gray-400">{fmt(vrvaTotalActual)} / {fmt(vrvaTotalBudget)}</div>
-                  </div>
+                <SectionShell
+                  title="VR / VA"
+                  icon={<Wallet className="w-5 h-5 text-emerald-400" />}
+                  open={panelOpen.vrva}
+                  onToggle={() => togglePanel("vrva")}
+                  actions={<div className="text-sm text-gray-400">{fmt(vrvaTotalActual)} / {fmt(vrvaTotalBudget)}</div>}
+                >
                   <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
+                    <table className="w-full text-sm min-w-[520px]">
                       <thead className="bg-white/[0.03] text-gray-400">
                         <tr>
                           <th className="px-4 py-3 text-left">Categoria</th>
@@ -629,164 +740,173 @@ export default function DashboardPage() {
                             <td className="px-4 py-3 text-right">{row.frequency > 0 ? fmt(row.average) : "—"}</td>
                           </tr>
                         ))}
-                        <tr className="border-t border-white/10 font-semibold text-white bg-white/[0.03]">
-                          <td className="px-4 py-3">Total</td>
-                          <td className="px-4 py-3 text-right">{fmt(vrvaTotalBudget)}</td>
-                          <td className="px-4 py-3 text-right">{fmt(vrvaTotalActual)}</td>
-                          <td className="px-4 py-3 text-right">{vrvaRows.reduce((sum, row) => sum + row.frequency, 0)}</td>
-                          <td className="px-4 py-3 text-right">{vrvaRows.reduce((sum, row) => sum + row.frequency, 0) > 0 ? fmt(vrvaTotalActual / vrvaRows.reduce((sum, row) => sum + row.frequency, 0)) : "—"}</td>
-                        </tr>
                       </tbody>
                     </table>
                   </div>
-                </section>
+                </SectionShell>
 
-                <section className="rounded-2xl bg-[#1f2125] border border-white/10 overflow-hidden">
-                  <div className="px-6 py-4 border-b border-white/10 flex items-center gap-2">
-                    <CreditCard className="w-5 h-5 text-slate-300" />
-                    <h3 className="text-lg font-semibold text-white">Lançamentos no cartão / compromissos do mês</h3>
-                  </div>
+                <SectionShell
+                  title="Lançamentos da esposa / reembolso"
+                  icon={<Users className="w-5 h-5 text-slate-300" />}
+                  open={panelOpen.partner}
+                  onToggle={() => togglePanel("partner")}
+                  className="bg-[#2a2b30] border border-white/10"
+                  actions={
+                    <button onClick={() => setShowPartnerModal(true)} className="px-3 py-2 rounded-xl bg-white/10 text-white text-sm hover:bg-white/15">
+                      Novo
+                    </button>
+                  }
+                >
                   <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
+                    <table className="w-full text-sm min-w-[560px]">
                       <thead className="bg-white/[0.04] text-gray-300">
                         <tr>
                           <th className="px-4 py-3 text-left">Descrição</th>
                           <th className="px-4 py-3 text-right">Valor</th>
                           <th className="px-4 py-3 text-left">Origem</th>
+                          <th className="px-4 py-3 text-left">Data</th>
+                          <th className="px-4 py-3 text-left">Status</th>
+                          <th className="px-4 py-3 text-right">Ações</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {cardRows.length === 0 ? (
-                          <tr>
-                            <td className="px-4 py-6 text-gray-400" colSpan={3}>Nenhum lançamento de cartão ou empréstimo neste mês.</td>
-                          </tr>
+                        {partnerExpenses.length === 0 ? (
+                          <tr><td colSpan={6} className="px-4 py-6 text-gray-400">Nenhum lançamento da esposa neste mês.</td></tr>
                         ) : (
-                          cardRows.map((row) => (
-                            <tr key={row.id} className="border-t border-white/5 text-gray-200">
-                              <td className="px-4 py-3">{row.title}</td>
-                              <td className="px-4 py-3 text-right">{fmt(row.amount)}</td>
-                              <td className="px-4 py-3 text-gray-400">{row.source}</td>
+                          partnerExpenses.map((expense) => (
+                            <tr key={expense.id} className="border-t border-white/5 text-gray-200">
+                              <td className="px-4 py-3">{expense.description}{expense.note ? <span className="block text-xs text-gray-500">{expense.note}</span> : null}</td>
+                              <td className="px-4 py-3 text-right">{fmt(expense.amount)}</td>
+                              <td className="px-4 py-3 text-gray-400">{expense.source || "—"}</td>
+                              <td className="px-4 py-3">{dayLabel(expense.charge_date)}</td>
+                              <td className="px-4 py-3">{expense.is_paid ? <span className="text-emerald-400">Pago</span> : <span className="text-amber-400">Em aberto</span>}</td>
+                              <td className="px-4 py-3 text-right"><button onClick={() => handleDeletePartner(expense.id)} className="text-xs text-gray-400 hover:text-red-400">remover</button></td>
                             </tr>
                           ))
-                        )}
-                        {cardRows.length > 0 && (
-                          <tr className="border-t border-white/10 bg-white/[0.04] text-white font-semibold">
-                            <td className="px-4 py-3">Total</td>
-                            <td className="px-4 py-3 text-right">{fmt(cardRows.reduce((sum, row) => sum + row.amount, 0))}</td>
-                            <td className="px-4 py-3" />
-                          </tr>
                         )}
                       </tbody>
                     </table>
                   </div>
-                </section>
+                </SectionShell>
               </div>
 
-              <section className="rounded-2xl bg-[#1a1a2e] border border-white/10 overflow-hidden">
-                <div className="px-6 py-4 border-b border-white/10 flex items-center gap-2">
-                  <CalendarDays className="w-5 h-5 text-blue-400" />
-                  <h3 className="text-lg font-semibold text-white">Fluxo diário detalhado do mês</h3>
+              <SectionShell
+                title="Lançamentos no cartão / compromissos do mês"
+                icon={<CreditCard className="w-5 h-5 text-slate-300" />}
+                open={panelOpen.cards}
+                onToggle={() => togglePanel("cards")}
+                className="bg-[#1f2125] border border-white/10"
+              >
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm min-w-[520px]">
+                    <thead className="bg-white/[0.04] text-gray-300">
+                      <tr>
+                        <th className="px-4 py-3 text-left">Descrição</th>
+                        <th className="px-4 py-3 text-right">Valor</th>
+                        <th className="px-4 py-3 text-left">Origem</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {cardRows.length === 0 ? (
+                        <tr><td className="px-4 py-6 text-gray-400" colSpan={3}>Nenhum lançamento de cartão ou empréstimo neste mês.</td></tr>
+                      ) : (
+                        cardRows.map((row) => (
+                          <tr key={row.id} className="border-t border-white/5 text-gray-200">
+                            <td className="px-4 py-3">{row.title}</td>
+                            <td className="px-4 py-3 text-right">{fmt(row.amount)}</td>
+                            <td className="px-4 py-3 text-gray-400">{row.source}</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
                 </div>
+              </SectionShell>
 
-                <div className="px-6 py-4 grid grid-cols-2 lg:grid-cols-5 gap-4 border-b border-white/10 bg-white/[0.03]">
-                  <div>
-                    <p className="text-xs text-gray-500">Saldo de entrada</p>
-                    <p className="text-lg font-semibold text-white">{fmt(openingBalance)}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-gray-500">Renda do mês</p>
-                    <p className="text-lg font-semibold text-emerald-400">{fmt(summary?.total_income || 0)}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-gray-500">Saída do mês</p>
-                    <p className="text-lg font-semibold text-red-400">{fmt(summary?.total_expense || 0)}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-gray-500">Projeção base</p>
-                    <p className="text-lg font-semibold text-amber-400">{fmt(projectedBaseExpense)}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-gray-500">Saldo futuro</p>
-                    <p className={`text-lg font-semibold ${projectedClosingWithScenarios >= 0 ? "text-blue-300" : "text-red-400"}`}>{fmt(projectedClosingWithScenarios)}</p>
-                  </div>
+              <SectionShell
+                title="Fluxo diário detalhado do mês"
+                icon={<CalendarDays className="w-5 h-5 text-blue-400" />}
+                open={panelOpen.daily}
+                onToggle={() => togglePanel("daily")}
+                actions={
+                  <button onClick={toggleAllDays} className="px-3 py-2 rounded-xl border border-white/10 text-gray-300 text-sm hover:bg-white/5">
+                    {allDaysExpanded ? "Recolher dias" : "Expandir dias"}
+                  </button>
+                }
+              >
+                <div className="px-4 sm:px-6 py-4 grid grid-cols-2 lg:grid-cols-5 gap-4 border-b border-white/10 bg-white/[0.03]">
+                  <div><p className="text-xs text-gray-500">Saldo de entrada</p><p className="text-lg font-semibold text-white">{fmt(openingBalance)}</p></div>
+                  <div><p className="text-xs text-gray-500">Renda do mês</p><p className="text-lg font-semibold text-emerald-400">{fmt(summary?.total_income || 0)}</p></div>
+                  <div><p className="text-xs text-gray-500">Saída do mês</p><p className="text-lg font-semibold text-red-400">{fmt(summary?.total_expense || 0)}</p></div>
+                  <div><p className="text-xs text-gray-500">Projeção base</p><p className="text-lg font-semibold text-amber-400">{fmt(projectedBaseExpense)}</p></div>
+                  <div><p className="text-xs text-gray-500">Saldo futuro</p><p className={`text-lg font-semibold ${projectedClosingWithScenarios >= 0 ? "text-blue-300" : "text-red-400"}`}>{fmt(projectedClosingWithScenarios)}</p></div>
                 </div>
-
                 <div className="divide-y divide-white/5">
                   {dailyFlow.map((day) => {
                     const dayTransactions = transactionsByDay.get(day.date) || [];
+                    const expanded = !!openDays[day.date];
                     const dayNumber = Number(day.date.slice(8, 10));
                     return (
-                      <div key={day.date} className={`px-6 py-4 ${day.is_today ? "bg-blue-500/10" : ""}`}>
-                        <div className="grid grid-cols-1 lg:grid-cols-[120px,1fr,220px] gap-4 items-start">
-                          <div>
-                            <div className="flex items-center gap-2">
-                              <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-semibold ${day.is_today ? "bg-blue-500 text-white" : day.is_future ? "bg-white/5 text-gray-500" : "bg-white/10 text-white"}`}>
-                                {dayNumber}
-                              </div>
+                      <div key={day.date} className={`${day.is_today ? "bg-blue-500/10" : ""}`}>
+                        <button onClick={() => toggleDay(day.date)} className="w-full px-4 sm:px-6 py-4 text-left hover:bg-white/[0.02] transition">
+                          <div className="grid grid-cols-1 md:grid-cols-[150px,1fr,160px] gap-4 items-center">
+                            <div className="flex items-center gap-3">
+                              <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-semibold ${day.is_today ? "bg-blue-500 text-white" : day.is_future ? "bg-white/5 text-gray-500" : "bg-white/10 text-white"}`}>{dayNumber}</div>
                               <div>
                                 <p className="text-sm font-medium text-white">{day.day_of_week}</p>
                                 <p className="text-xs text-gray-500">{day.date}</p>
                               </div>
+                              {expanded ? <ChevronUp className="w-4 h-4 text-gray-500" /> : <ChevronDown className="w-4 h-4 text-gray-500" />}
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              {day.events.slice(0, expanded ? day.events.length : 2).map((event, index) => (
+                                <span key={`${day.date}-${index}`} className="text-xs text-gray-300 bg-white/[0.04] border border-white/5 rounded-full px-3 py-1">{event}</span>
+                              ))}
+                              {!expanded && day.events.length > 2 && <span className="text-xs text-gray-500">+{day.events.length - 2} eventos</span>}
+                            </div>
+                            <div className="text-left md:text-right">
+                              <p className={`text-sm font-semibold ${day.running_balance >= 0 ? "text-blue-300" : "text-red-400"}`}>{fmt(day.running_balance)}</p>
+                              <p className="text-xs text-gray-500">saldo acumulado</p>
                             </div>
                           </div>
+                        </button>
 
-                          <div className="space-y-2">
-                            {day.events.map((event, index) => (
-                              <div key={`${day.date}-${index}`} className="text-sm text-gray-300 bg-white/[0.03] border border-white/5 rounded-xl px-3 py-2">
-                                {event}
+                        {expanded && (
+                          <div className="px-4 sm:px-6 pb-4">
+                            <div className="grid grid-cols-1 lg:grid-cols-[1fr,220px] gap-4">
+                              <div className="space-y-2">
+                                {day.events.map((event, index) => (
+                                  <div key={`${day.date}-full-${index}`} className="text-sm text-gray-300 bg-white/[0.03] border border-white/5 rounded-xl px-3 py-2">{event}</div>
+                                ))}
+                                {dayTransactions.map((transaction) => (
+                                  <div key={transaction.id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl px-3 py-3 bg-white/[0.02] border border-white/5">
+                                    <div className="min-w-0">
+                                      <p className="text-sm text-white break-words">{transaction.category?.icon || "📦"} {transaction.description || transaction.category?.name || "Sem descrição"}</p>
+                                      <p className="text-xs text-gray-500">{transaction.category?.name || "Sem categoria"}</p>
+                                    </div>
+                                    <div className="flex items-center gap-3 justify-between sm:justify-end">
+                                      <span className={`text-sm font-semibold ${transaction.type === "income" ? "text-emerald-400" : "text-red-400"}`}>{transaction.type === "income" ? "+" : "-"}{fmt(transaction.amount)}</span>
+                                      <button onClick={() => handleDeleteTransaction(transaction.id)} className="text-xs text-gray-500 hover:text-red-400">remover</button>
+                                    </div>
+                                  </div>
+                                ))}
+                                {day.events.length === 0 && dayTransactions.length === 0 && <div className="text-sm text-gray-600">Sem lançamentos neste dia.</div>}
                               </div>
-                            ))}
-
-                            {dayTransactions.map((transaction) => (
-                              <div key={transaction.id} className="flex items-center justify-between gap-4 rounded-xl px-3 py-2 bg-white/[0.02] border border-white/5">
-                                <div className="min-w-0">
-                                  <p className="text-sm text-white truncate">{transaction.category?.icon || "📦"} {transaction.description || transaction.category?.name || "Sem descrição"}</p>
-                                  <p className="text-xs text-gray-500">{transaction.category?.name || "Sem categoria"}</p>
-                                </div>
-                                <div className="flex items-center gap-3">
-                                  <span className={`text-sm font-semibold ${transaction.type === "income" ? "text-emerald-400" : "text-red-400"}`}>
-                                    {transaction.type === "income" ? "+" : "-"}{fmt(transaction.amount)}
-                                  </span>
-                                  <button onClick={() => handleDeleteTransaction(transaction.id)} className="text-xs text-gray-500 hover:text-red-400 transition-colors">
-                                    remover
-                                  </button>
-                                </div>
+                              <div className="rounded-2xl bg-white/[0.03] border border-white/5 p-4 space-y-2 h-fit">
+                                <div className="flex justify-between text-sm"><span className="text-gray-500">Entradas</span><span className="text-emerald-400 font-medium">{fmt(day.income)}</span></div>
+                                <div className="flex justify-between text-sm"><span className="text-gray-500">Recorrentes</span><span className="text-red-300 font-medium">{fmt(day.recurring_expenses)}</span></div>
+                                <div className="flex justify-between text-sm"><span className="text-gray-500">Variáveis</span><span className="text-red-400 font-medium">{fmt(day.variable_expenses)}</span></div>
+                                <div className="flex justify-between text-sm border-t border-white/5 pt-2"><span className="text-gray-400">Saldo do dia</span><span className={`font-semibold ${day.net >= 0 ? "text-emerald-400" : "text-red-400"}`}>{day.net >= 0 ? "+" : "-"}{fmt(Math.abs(day.net))}</span></div>
+                                <div className="flex justify-between text-sm"><span className="text-gray-400">Saldo acumulado</span><span className={`font-semibold ${day.running_balance >= 0 ? "text-blue-300" : "text-red-400"}`}>{fmt(day.running_balance)}</span></div>
                               </div>
-                            ))}
-
-                            {day.events.length === 0 && dayTransactions.length === 0 && (
-                              <div className="text-sm text-gray-600">Sem lançamentos neste dia.</div>
-                            )}
-                          </div>
-
-                          <div className="rounded-2xl bg-white/[0.03] border border-white/5 p-4 space-y-2">
-                            <div className="flex justify-between text-sm">
-                              <span className="text-gray-500">Entradas</span>
-                              <span className="text-emerald-400 font-medium">{fmt(day.income)}</span>
-                            </div>
-                            <div className="flex justify-between text-sm">
-                              <span className="text-gray-500">Recorrentes</span>
-                              <span className="text-red-300 font-medium">{fmt(day.recurring_expenses)}</span>
-                            </div>
-                            <div className="flex justify-between text-sm">
-                              <span className="text-gray-500">Variáveis</span>
-                              <span className="text-red-400 font-medium">{fmt(day.variable_expenses)}</span>
-                            </div>
-                            <div className="flex justify-between text-sm border-t border-white/5 pt-2">
-                              <span className="text-gray-400">Saldo do dia</span>
-                              <span className={`font-semibold ${day.net >= 0 ? "text-emerald-400" : "text-red-400"}`}>{day.net >= 0 ? "+" : "-"}{fmt(Math.abs(day.net))}</span>
-                            </div>
-                            <div className="flex justify-between text-sm">
-                              <span className="text-gray-400">Saldo acumulado</span>
-                              <span className={`font-semibold ${day.running_balance >= 0 ? "text-blue-300" : "text-red-400"}`}>{fmt(day.running_balance)}</span>
                             </div>
                           </div>
-                        </div>
+                        )}
                       </div>
                     );
                   })}
                 </div>
-              </section>
+              </SectionShell>
             </>
           )}
         </div>
@@ -798,91 +918,42 @@ export default function DashboardPage() {
           <div className="relative bg-[#1a1a2e] border border-white/10 rounded-2xl p-6 w-full max-w-md animate-slide-up shadow-2xl">
             <div className="flex items-center justify-between mb-6">
               <h3 className="text-lg font-semibold text-white">Nova Transação</h3>
-              <button onClick={() => setShowAddModal(false)} className="p-1.5 rounded-lg hover:bg-white/5 text-gray-400 hover:text-white transition-colors">
-                <X className="w-5 h-5" />
-              </button>
+              <button onClick={() => setShowAddModal(false)} className="p-1.5 rounded-lg hover:bg-white/5 text-gray-400 hover:text-white transition-colors"><X className="w-5 h-5" /></button>
             </div>
-
             <form onSubmit={handleAddTransaction} className="space-y-4">
               <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => setNewType("expense")}
-                  className={`flex-1 py-2.5 rounded-xl text-sm font-medium transition-all ${
-                    newType === "expense"
-                      ? "bg-rose-500/20 text-rose-400 border border-rose-500/30"
-                      : "bg-white/5 text-gray-400 border border-white/5 hover:bg-white/10"
-                  }`}
-                >
-                  📤 Despesa
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setNewType("income")}
-                  className={`flex-1 py-2.5 rounded-xl text-sm font-medium transition-all ${
-                    newType === "income"
-                      ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
-                      : "bg-white/5 text-gray-400 border border-white/5 hover:bg-white/10"
-                  }`}
-                >
-                  📥 Receita
-                </button>
+                <button type="button" onClick={() => setNewType("expense")} className={`flex-1 py-2.5 rounded-xl text-sm font-medium transition-all ${newType === "expense" ? "bg-rose-500/20 text-rose-400 border border-rose-500/30" : "bg-white/5 text-gray-400 border border-white/5 hover:bg-white/10"}`}>📤 Despesa</button>
+                <button type="button" onClick={() => setNewType("income")} className={`flex-1 py-2.5 rounded-xl text-sm font-medium transition-all ${newType === "income" ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30" : "bg-white/5 text-gray-400 border border-white/5 hover:bg-white/10"}`}>📥 Receita</button>
               </div>
+              <input type="number" step="0.01" min="0.01" value={newAmount} onChange={(e) => setNewAmount(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white" placeholder="Valor" required />
+              <input type="text" value={newDescription} onChange={(e) => setNewDescription(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white" placeholder="Descrição" />
+              <input type="date" value={newDate} onChange={(e) => setNewDate(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white" />
+              <select value={newCategoryId} onChange={(e) => setNewCategoryId(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white">
+                <option value="" className="bg-[#1a1a2e]">Selecionar categoria</option>
+                {categories.map((cat) => <option key={cat.id} value={cat.id} className="bg-[#1a1a2e]">{cat.icon} {cat.name}</option>)}
+              </select>
+              <button type="submit" className="w-full py-3 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 text-white font-semibold">Adicionar</button>
+            </form>
+          </div>
+        </div>
+      )}
 
-              <div>
-                <label className="block text-sm text-gray-400 mb-2">Valor (R$)</label>
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0.01"
-                  value={newAmount}
-                  onChange={(e) => setNewAmount(e.target.value)}
-                  className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white text-lg font-semibold placeholder-gray-600 focus:outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500 transition-colors"
-                  placeholder="0.00"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm text-gray-400 mb-2">Descrição</label>
-                <input
-                  type="text"
-                  value={newDescription}
-                  onChange={(e) => setNewDescription(e.target.value)}
-                  className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white placeholder-gray-600 focus:outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500 transition-colors"
-                  placeholder="Ex: Mercado, Salário..."
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm text-gray-400 mb-2">Data</label>
-                <input
-                  type="date"
-                  value={newDate}
-                  onChange={(e) => setNewDate(e.target.value)}
-                  className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white focus:outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500 transition-colors"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm text-gray-400 mb-2">Categoria</label>
-                <select
-                  value={newCategoryId}
-                  onChange={(e) => setNewCategoryId(e.target.value)}
-                  className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white focus:outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500 transition-colors"
-                >
-                  <option value="" className="bg-[#1a1a2e]">Selecionar...</option>
-                  {categories.map((cat) => (
-                    <option key={cat.id} value={cat.id} className="bg-[#1a1a2e]">
-                      {cat.icon} {cat.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <button type="submit" className="w-full py-3 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 text-white font-semibold hover:from-violet-500 hover:to-indigo-500 transition-all">
-                Adicionar
-              </button>
+      {showPartnerModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowPartnerModal(false)} />
+          <div className="relative bg-[#1f2125] border border-white/10 rounded-2xl p-6 w-full max-w-md shadow-2xl">
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="text-lg font-semibold text-white">Novo lançamento da esposa</h3>
+              <button onClick={() => setShowPartnerModal(false)} className="p-1.5 rounded-lg hover:bg-white/5 text-gray-400 hover:text-white transition-colors"><X className="w-5 h-5" /></button>
+            </div>
+            <form onSubmit={handleAddPartnerExpense} className="space-y-4">
+              <input type="text" value={partnerDescription} onChange={(e) => setPartnerDescription(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white" placeholder="Descrição" required />
+              <input type="number" step="0.01" min="0.01" value={partnerAmount} onChange={(e) => setPartnerAmount(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white" placeholder="Valor" required />
+              <input type="text" value={partnerSource} onChange={(e) => setPartnerSource(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white" placeholder="Origem / cartão" />
+              <input type="text" value={partnerNote} onChange={(e) => setPartnerNote(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white" placeholder="Observação" />
+              <input type="date" value={partnerDate} onChange={(e) => setPartnerDate(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white" />
+              <label className="flex items-center gap-2 text-sm text-gray-300"><input type="checkbox" checked={partnerPaid} onChange={(e) => setPartnerPaid(e.target.checked)} className="accent-emerald-500" /> Já foi pago por ela</label>
+              <button type="submit" className="w-full py-3 rounded-xl bg-slate-700 hover:bg-slate-600 text-white font-semibold">Salvar</button>
             </form>
           </div>
         </div>

@@ -26,7 +26,15 @@ from telegram.ext import (
 from sqlalchemy import extract
 
 from database import SessionLocal
-from models import User, Category, Transaction
+from models import (
+    User,
+    Category,
+    Transaction,
+    RecurringExpense,
+    CreditCardAccount,
+    CardInstallment,
+    CardSubscription,
+)
 from config import TELEGRAM_BOT_TOKEN, ALLOWED_TELEGRAM_IDS
 
 # ==================== MAPEAMENTO DE CATEGORIAS ====================
@@ -185,6 +193,26 @@ def get_user_by_telegram(telegram_id: int, db) -> User | None:
     return db.query(User).filter(User.telegram_id == telegram_id).first()
 
 
+def _get_linked_user_or_reply(update: Update, db) -> User | None:
+    user = get_user_by_telegram(update.effective_user.id, db)
+    return user
+
+
+def _split_command_payload(raw_args: list[str]) -> list[str]:
+    joined = " ".join(raw_args).strip()
+    return [part.strip() for part in joined.split("|") if part.strip()]
+
+
+def _find_card_by_name(db, user_id: int, name: str) -> CreditCardAccount | None:
+    normalized = name.strip().lower()
+    cards = db.query(CreditCardAccount).filter(CreditCardAccount.user_id == user_id).all()
+    for card in cards:
+        haystack = f"{card.bank_name} {card.card_name}".lower()
+        if normalized in haystack:
+            return card
+    return None
+
+
 # ==================== HANDLERS ====================
 
 
@@ -201,11 +229,17 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📤 *Com categoria:* `-25 uber transporte`\n\n"
         "📅 *Com data:* `-45 mercado @20/03`\n"
         "🏷️ *Categoria explícita:* `-35 almoço #Restaurante`\n\n"
+        "🔁 *Recorrente:* `/recorrente academia | 99 | Saúde | 5 | debit`\n"
+        "💳 *Parcelado:* `/parcelado celular | 1200 | 10 | nubank | E-Commerce | 20/03/2026`\n"
+        "📆 *Assinatura:* `/assinatura spotify | 21.90 | itau | Lazer`\n\n"
         "📋 *Comandos disponíveis:*\n"
         "/resumo — Resumo do mês\n"
         "/saldo — Saldo total\n"
         "/categorias — Ver categorias\n"
         "/ultimas — Últimas transações\n"
+        "/recorrente — Criar gasto recorrente\n"
+        "/parcelado — Criar compra parcelada\n"
+        "/assinatura — Criar assinatura no cartão\n"
         "/ajuda — Esta mensagem\n\n"
         f"🆔 Seu Telegram ID: `{update.effective_user.id}`",
         parse_mode="Markdown",
@@ -214,6 +248,142 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await cmd_start(update, context)
+
+
+async def cmd_recorrente(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorized(update.effective_user.id):
+        return
+
+    parts = _split_command_payload(context.args)
+    if len(parts) < 4:
+        await update.message.reply_text(
+            "Use: /recorrente descrição | valor | categoria | dia | forma(opcional) | banco(opcional)"
+        )
+        return
+
+    db = SessionLocal()
+    try:
+        user = _get_linked_user_or_reply(update, db)
+        if not user:
+            await update.message.reply_text("⚠️ Telegram não vinculado.")
+            return
+
+        description, amount_raw, category_raw, due_day_raw = parts[:4]
+        payment_type = parts[4] if len(parts) > 4 else "pix"
+        bank_name = parts[5] if len(parts) > 5 else None
+        category = find_category(description, db, category_raw)
+
+        expense = RecurringExpense(
+            user_id=user.id,
+            name=description,
+            category_id=category.id if category else None,
+            amount=float(amount_raw.replace(",", ".")),
+            due_day=int(due_day_raw),
+            bank_name=bank_name,
+            payment_type=payment_type,
+            is_active=True,
+        )
+        db.add(expense)
+        db.commit()
+
+        await update.message.reply_text(
+            f"🔁 Recorrente criado: {description} · R$ {expense.amount:.2f} · dia {expense.due_day}"
+        )
+    finally:
+        db.close()
+
+
+async def cmd_parcelado(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorized(update.effective_user.id):
+        return
+
+    parts = _split_command_payload(context.args)
+    if len(parts) < 5:
+        await update.message.reply_text(
+            "Use: /parcelado descrição | total | parcelas | cartão | categoria | data(opcional dd/mm/aaaa)"
+        )
+        return
+
+    db = SessionLocal()
+    try:
+        user = _get_linked_user_or_reply(update, db)
+        if not user:
+            await update.message.reply_text("⚠️ Telegram não vinculado.")
+            return
+
+        description, total_raw, installments_raw, card_raw, category_raw = parts[:5]
+        start_date = _parse_target_date(parts[5]) if len(parts) > 5 else datetime.utcnow()
+        card = _find_card_by_name(db, user.id, card_raw)
+        if not card:
+          await update.message.reply_text("⚠️ Cartão não encontrado.")
+          return
+
+        total_amount = float(total_raw.replace(",", "."))
+        total_installments = int(installments_raw)
+        category = find_category(description, db, category_raw)
+
+        installment = CardInstallment(
+            user_id=user.id,
+            card_id=card.id,
+            description=description,
+            total_amount=total_amount,
+            monthly_amount=round(total_amount / total_installments, 2),
+            total_installments=total_installments,
+            paid_installments=0,
+            start_date=start_date or datetime.utcnow(),
+            category_id=category.id if category else None,
+        )
+        db.add(installment)
+        db.commit()
+
+        await update.message.reply_text(
+            f"💳 Parcelado criado: {description} · {total_installments}x de R$ {installment.monthly_amount:.2f}"
+        )
+    finally:
+        db.close()
+
+
+async def cmd_assinatura(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorized(update.effective_user.id):
+        return
+
+    parts = _split_command_payload(context.args)
+    if len(parts) < 4:
+        await update.message.reply_text(
+            "Use: /assinatura descrição | valor mensal | cartão | categoria"
+        )
+        return
+
+    db = SessionLocal()
+    try:
+        user = _get_linked_user_or_reply(update, db)
+        if not user:
+            await update.message.reply_text("⚠️ Telegram não vinculado.")
+            return
+
+        description, amount_raw, card_raw, category_raw = parts[:4]
+        card = _find_card_by_name(db, user.id, card_raw)
+        if not card:
+            await update.message.reply_text("⚠️ Cartão não encontrado.")
+            return
+        category = find_category(description, db, category_raw)
+
+        subscription = CardSubscription(
+            user_id=user.id,
+            card_id=card.id,
+            description=description,
+            monthly_amount=float(amount_raw.replace(",", ".")),
+            category_id=category.id if category else None,
+            is_active=True,
+        )
+        db.add(subscription)
+        db.commit()
+
+        await update.message.reply_text(
+            f"📆 Assinatura criada: {description} · R$ {subscription.monthly_amount:.2f}/mês"
+        )
+    finally:
+        db.close()
 
 
 async def handle_transaction(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -433,6 +603,9 @@ async def post_init(application):
         BotCommand("saldo", "Saldo total"),
         BotCommand("categorias", "Ver categorias"),
         BotCommand("ultimas", "Últimas transações"),
+        BotCommand("recorrente", "Criar gasto recorrente"),
+        BotCommand("parcelado", "Criar compra parcelada"),
+        BotCommand("assinatura", "Criar assinatura no cartão"),
         BotCommand("ajuda", "Ajuda"),
     ])
 
@@ -446,6 +619,9 @@ def build_application() -> Application:
     application.add_handler(CommandHandler("saldo", cmd_saldo))
     application.add_handler(CommandHandler("categorias", cmd_categorias))
     application.add_handler(CommandHandler("ultimas", cmd_ultimas))
+    application.add_handler(CommandHandler("recorrente", cmd_recorrente))
+    application.add_handler(CommandHandler("parcelado", cmd_parcelado))
+    application.add_handler(CommandHandler("assinatura", cmd_assinatura))
     application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_transaction)
     )

@@ -190,6 +190,25 @@ class WeeklyBudget(Base):
     user = relationship("User")
 
 
+# ==================== GASTOS DA ESPOSA / REEMBOLSO ====================
+
+
+class PartnerExpense(Base):
+    __tablename__ = "partner_expenses"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    description = Column(String, nullable=False)
+    amount = Column(Float, nullable=False)
+    source = Column(String, nullable=True)
+    note = Column(String, nullable=True)
+    charge_date = Column(DateTime, nullable=False, default=datetime.utcnow)
+    is_paid = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    user = relationship("User")
+
+
 # ==================== CENÁRIOS DE GASTO ====================
 
 

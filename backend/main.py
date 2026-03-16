@@ -10,7 +10,7 @@ from database import engine, get_db, SessionLocal, Base
 from models import (
     User, Category, Transaction, SalaryConfig, CategoryBudget,
     RecurringExpense, CreditCardAccount, CardInstallment, CardSubscription,
-    Loan, WeeklyBudget, Scenario, ScenarioItem,
+    Loan, WeeklyBudget, PartnerExpense, Scenario, ScenarioItem,
 )
 from business_days import get_salary_payment_info, MONTHS_PT
 from schemas import (
@@ -27,6 +27,7 @@ from schemas import (
     CardMonthlyView, CardMonthData,
     LoanCreate, LoanResponse, LoanSchedule, LoanMonthItem,
     WeeklyBudgetCreate, WeeklyBudgetResponse, WeekEntry,
+    PartnerExpenseCreate, PartnerExpenseResponse,
     DailyFlowItem,
     ScenarioCreate, ScenarioUpdate, ScenarioResponse, ScenarioItemCreate,
     ScenarioMonthlyImpact,
@@ -1021,6 +1022,87 @@ def set_weekly_budget(
     db.commit()
     db.refresh(wb)
     return wb
+
+
+# ==================== GASTOS DA ESPOSA / REEMBOLSO ====================
+
+
+@app.get("/api/partner-expenses", response_model=List[PartnerExpenseResponse])
+def list_partner_expenses(
+    month: Optional[int] = Query(None),
+    year: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    query = db.query(PartnerExpense).filter(PartnerExpense.user_id == current_user.id)
+    if month:
+        query = query.filter(extract("month", PartnerExpense.charge_date) == month)
+    if year:
+        query = query.filter(extract("year", PartnerExpense.charge_date) == year)
+    return query.order_by(PartnerExpense.charge_date.asc()).all()
+
+
+@app.post("/api/partner-expenses", response_model=PartnerExpenseResponse, status_code=201)
+def create_partner_expense(
+    data: PartnerExpenseCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    expense = PartnerExpense(
+        user_id=current_user.id,
+        description=data.description,
+        amount=data.amount,
+        source=data.source,
+        note=data.note,
+        charge_date=data.charge_date or datetime.utcnow(),
+        is_paid=data.is_paid,
+    )
+    db.add(expense)
+    db.commit()
+    db.refresh(expense)
+    return expense
+
+
+@app.put("/api/partner-expenses/{expense_id}", response_model=PartnerExpenseResponse)
+def update_partner_expense(
+    expense_id: int,
+    data: PartnerExpenseCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    expense = db.query(PartnerExpense).filter(
+        PartnerExpense.id == expense_id,
+        PartnerExpense.user_id == current_user.id,
+    ).first()
+    if not expense:
+        raise HTTPException(status_code=404, detail="Lançamento da esposa não encontrado")
+
+    expense.description = data.description
+    expense.amount = data.amount
+    expense.source = data.source
+    expense.note = data.note
+    expense.charge_date = data.charge_date or expense.charge_date
+    expense.is_paid = data.is_paid
+    db.commit()
+    db.refresh(expense)
+    return expense
+
+
+@app.delete("/api/partner-expenses/{expense_id}")
+def delete_partner_expense(
+    expense_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    expense = db.query(PartnerExpense).filter(
+        PartnerExpense.id == expense_id,
+        PartnerExpense.user_id == current_user.id,
+    ).first()
+    if not expense:
+        raise HTTPException(status_code=404, detail="Lançamento da esposa não encontrado")
+    db.delete(expense)
+    db.commit()
+    return {"detail": "Lançamento removido"}
 
 
 # ==================== FLUXO DIÁRIO ====================

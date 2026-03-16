@@ -368,6 +368,32 @@ class WeekEntry(BaseModel):
     is_current: bool
 
 
+# ==================== GASTOS DA ESPOSA / REEMBOLSO ====================
+
+
+class PartnerExpenseCreate(BaseModel):
+    description: str
+    amount: float
+    source: Optional[str] = None
+    note: Optional[str] = None
+    charge_date: Optional[datetime] = None
+    is_paid: bool = False
+
+
+class PartnerExpenseResponse(BaseModel):
+    id: int
+    description: str
+    amount: float
+    source: Optional[str]
+    note: Optional[str]
+    charge_date: datetime
+    is_paid: bool
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
 # ==================== FLUXO DIÁRIO ====================
 
 class DailyFlowItem(BaseModel):
