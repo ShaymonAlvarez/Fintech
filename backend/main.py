@@ -1249,6 +1249,7 @@ def update_partner_expense(
 @app.delete("/api/partner-expenses/{expense_id}")
 def delete_partner_expense(
     expense_id: int,
+    remove_series: bool = Query(False),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -1258,6 +1259,19 @@ def delete_partner_expense(
     ).first()
     if not expense:
         raise HTTPException(status_code=404, detail="Lançamento da esposa não encontrado")
+
+    if remove_series and expense.installment_group:
+        (
+            db.query(PartnerExpense)
+            .filter(
+                PartnerExpense.user_id == current_user.id,
+                PartnerExpense.installment_group == expense.installment_group,
+            )
+            .delete(synchronize_session=False)
+        )
+        db.commit()
+        return {"detail": "Série de lançamentos removida"}
+
     db.delete(expense)
     db.commit()
     return {"detail": "Lançamento removido"}

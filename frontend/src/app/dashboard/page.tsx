@@ -1018,6 +1018,18 @@ export default function DashboardPage() {
     }
   };
 
+  const handleDeletePartnerSeries = async (id: number) => {
+    if (!confirm("Remover toda a série deste parcelamento?")) return;
+    try {
+      await api.delete(`/partner-expenses/${id}?remove_series=true`);
+      setShowPartnerModal(false);
+      resetPartnerForm();
+      loadData();
+    } catch (error) {
+      console.error("Erro ao remover série:", error);
+    }
+  };
+
   const handleSaveTransaction = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
@@ -1480,6 +1492,9 @@ export default function DashboardPage() {
                               <td className="px-4 py-3">
                                 <div className="flex items-center justify-end gap-3">
                                   <button onClick={() => openPartnerEditor(expense)} className="text-xs text-gray-400 hover:text-white">editar</button>
+                                  {expense.is_installment && expense.installment_group ? (
+                                    <button onClick={() => handleDeletePartnerSeries(expense.id)} className="text-xs text-amber-300 hover:text-amber-200">remover série</button>
+                                  ) : null}
                                   <button onClick={() => handleDeletePartner(expense.id)} className="text-xs text-gray-400 hover:text-red-400">remover</button>
                                 </div>
                               </td>
@@ -1891,7 +1906,12 @@ export default function DashboardPage() {
               <input type="date" value={partnerDate} onChange={(e) => setPartnerDate(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white" />
               {partnerIsInstallment ? <p className="text-xs text-violet-200/80">O sistema vai criar automaticamente as próximas parcelas a partir desta data. Ex.: 5/8 cria a parcela atual e replica até 8/8 nos meses seguintes.</p> : null}
               <label className="flex items-center gap-2 text-sm text-gray-300"><input type="checkbox" checked={partnerPaid} onChange={(e) => setPartnerPaid(e.target.checked)} className="accent-emerald-500" /> Já foi pago por ela</label>
-              <button type="submit" className="w-full py-3 rounded-xl bg-slate-700 hover:bg-slate-600 text-white font-semibold">{editingPartnerId ? "Salvar alterações" : "Salvar"}</button>
+              <div className="flex items-center gap-3">
+                <button type="submit" className="flex-1 py-3 rounded-xl bg-slate-700 hover:bg-slate-600 text-white font-semibold">{editingPartnerId ? "Salvar alterações" : "Salvar"}</button>
+                {editingPartnerId && partnerIsInstallment ? (
+                  <button type="button" onClick={() => handleDeletePartnerSeries(editingPartnerId)} className="px-4 py-3 rounded-xl border border-amber-500/20 text-amber-300 hover:bg-amber-500/10">Remover série</button>
+                ) : null}
+              </div>
             </form>
           </div>
         </div>
