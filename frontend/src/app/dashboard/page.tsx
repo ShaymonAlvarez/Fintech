@@ -1092,9 +1092,8 @@ export default function DashboardPage() {
                   <div className="grid grid-cols-1 xl:grid-cols-[260px,1fr,330px] gap-4 items-start">
                     <div className="rounded-3xl border border-amber-400/15 bg-gradient-to-b from-[#9a4c12] to-[#7b3408] p-6 min-h-[260px] flex flex-col justify-between shadow-lg shadow-black/20">
                       <div>
-                        <p className="text-3xl sm:text-4xl font-light text-amber-50 leading-tight">Metas -</p>
-                        <p className="text-3xl sm:text-4xl font-light text-amber-50 leading-tight">Salário:</p>
-                        <p className="text-4xl sm:text-5xl font-semibold text-white mt-4 break-words">{salaryTotal > 0 ? fmt(salaryTotal) : "—"}</p>
+                        <p className="text-xs uppercase tracking-[0.24em] text-amber-100/70">Salário base</p>
+                        <p className="text-4xl sm:text-5xl font-semibold text-white mt-3 break-words leading-none">{salaryTotal > 0 ? fmt(salaryTotal) : "—"}</p>
                       </div>
                       <div className="grid grid-cols-1 gap-3 mt-6">
                         <div className="rounded-2xl bg-black/10 border border-white/10 p-3">
