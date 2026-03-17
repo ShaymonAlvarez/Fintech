@@ -19,6 +19,7 @@ import {
   Target,
   Pencil,
   Check,
+  Trash2,
 } from "lucide-react";
 import Sidebar from "@/components/Sidebar";
 import SalaryModal from "@/components/SalaryModal";
@@ -59,6 +60,7 @@ interface Transaction {
   amount: number;
   type: string;
   description: string;
+  category_id: number | null;
   payment_type: string;
   card_id: number | null;
   created_at: string;
@@ -133,6 +135,7 @@ interface CardData {
 interface RecurringExpense {
   id: number;
   name: string;
+  category_id: number | null;
   amount: number;
   due_day: number;
   bank_name: string | null;
@@ -219,6 +222,8 @@ const PAYMENT_TYPE_LABELS: Record<string, string> = {
   credit: "Crédito",
   bank_transfer: "Transferência",
 };
+
+const VRVA_CATEGORY_NAMES = ["Mercados/Feiras", "Restaurante", "iFood"] as const;
 
 function fmt(v: number) {
   return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -356,6 +361,9 @@ export default function DashboardPage() {
   const [showPartnerModal, setShowPartnerModal] = useState(false);
   const [showBudgetModal, setShowBudgetModal] = useState(false);
   const [showCommitmentModal, setShowCommitmentModal] = useState(false);
+  const [editingTransactionId, setEditingTransactionId] = useState<number | null>(null);
+  const [editingPartnerId, setEditingPartnerId] = useState<number | null>(null);
+  const [editingCommitmentId, setEditingCommitmentId] = useState<number | null>(null);
   const [budgetScope, setBudgetScope] = useState<BudgetScope>("all");
 
   const [newAmount, setNewAmount] = useState("");
@@ -562,7 +570,7 @@ export default function DashboardPage() {
   const vrvaTotalActual = vrvaRows.reduce((sum, row) => sum + row.actual, 0);
   const budgetModalCategories = useMemo(() => {
     if (budgetScope === "vrva") {
-      return categories.filter((category) => ["Mercados/Feiras", "Restaurante", "iFood"].includes(category.name));
+      return categories.filter((category) => VRVA_CATEGORY_NAMES.includes(category.name as typeof VRVA_CATEGORY_NAMES[number]));
     }
     return categories;
   }, [categories, budgetScope]);
@@ -824,6 +832,159 @@ export default function DashboardPage() {
     setOpenDays(Object.fromEntries(plannerDays.map((day) => [day.date, next])));
   };
 
+  const resetTransactionForm = () => {
+    setEditingTransactionId(null);
+    setNewAmount("");
+    setNewDescription("");
+    setNewCategoryId("");
+    setNewType("expense");
+    setNewPaymentType("debit");
+    setNewCardId("");
+    setNewDate(ymd(new Date()));
+  };
+
+  const openTransactionEditor = (transaction?: Transaction) => {
+    if (!transaction) {
+      resetTransactionForm();
+      setShowAddModal(true);
+      return;
+    }
+
+    setEditingTransactionId(transaction.id);
+    setNewAmount(String(transaction.amount));
+    setNewDescription(transaction.description || "");
+    setNewCategoryId(transaction.category_id ? String(transaction.category_id) : "");
+    setNewType(transaction.type);
+    setNewPaymentType(transaction.type === "income" ? "debit" : transaction.payment_type || "debit");
+    setNewCardId(transaction.card_id ? String(transaction.card_id) : "");
+    setNewDate(transaction.created_at.slice(0, 10));
+    setShowAddModal(true);
+  };
+
+  const resetPartnerForm = () => {
+    setEditingPartnerId(null);
+    setPartnerDescription("");
+    setPartnerAmount("");
+    setPartnerSource("");
+    setPartnerNote("");
+    setPartnerDate(ymd(new Date()));
+    setPartnerPaid(false);
+  };
+
+  const openPartnerEditor = (expense?: PartnerExpense) => {
+    if (!expense) {
+      resetPartnerForm();
+      setShowPartnerModal(true);
+      return;
+    }
+
+    setEditingPartnerId(expense.id);
+    setPartnerDescription(expense.description);
+    setPartnerAmount(String(expense.amount));
+    setPartnerSource(expense.source || "");
+    setPartnerNote(expense.note || "");
+    setPartnerDate(expense.charge_date.slice(0, 10));
+    setPartnerPaid(expense.is_paid);
+    setShowPartnerModal(true);
+  };
+
+  const resetCommitmentForm = () => {
+    setEditingCommitmentId(null);
+    setCommitmentName("");
+    setCommitmentAmount("");
+    setCommitmentDay(String(new Date().getDate()));
+    setCommitmentPaymentType("pix");
+    setCommitmentSource("");
+    setCommitmentCategoryId("");
+  };
+
+  const openCommitmentEditor = (expense?: RecurringExpense) => {
+    if (!expense) {
+      resetCommitmentForm();
+      setShowCommitmentModal(true);
+      return;
+    }
+
+    setEditingCommitmentId(expense.id);
+    setCommitmentName(expense.name);
+    setCommitmentAmount(String(expense.amount));
+    setCommitmentDay(String(expense.due_day));
+    setCommitmentPaymentType(expense.payment_type);
+    setCommitmentSource(expense.bank_name || "");
+    setCommitmentCategoryId(expense.category_id ? String(expense.category_id) : "");
+    setShowCommitmentModal(true);
+  };
+
+  const openBudgetEditor = (scope: BudgetScope, categoryId?: number) => {
+    setBudgetScope(scope);
+    const availableCategories = scope === "vrva"
+      ? categories.filter((category) => VRVA_CATEGORY_NAMES.includes(category.name as typeof VRVA_CATEGORY_NAMES[number]))
+      : categories;
+    const selectedCategory = categoryId
+      ? availableCategories.find((category) => category.id === categoryId) || availableCategories[0]
+      : availableCategories[0];
+    setBudgetCategoryId(selectedCategory ? String(selectedCategory.id) : "");
+    setBudgetAmount(selectedCategory ? String(budgetMap.get(selectedCategory.id) || "") : "");
+    setShowBudgetModal(true);
+  };
+
+  const handleDeleteBudget = async (categoryId: number) => {
+    if (!confirm("Remover o limite dessa categoria?")) return;
+    try {
+      await api.delete(`/budgets/${categoryId}`);
+      if (String(categoryId) === budgetCategoryId) {
+        setBudgetAmount("");
+      }
+      loadData();
+    } catch (error) {
+      console.error("Erro ao remover limite:", error);
+    }
+  };
+
+  const handleDeleteSalary = async () => {
+    if (!confirm("Remover a configuração de salário do dashboard?")) return;
+    try {
+      await api.delete("/salary/config");
+      loadData();
+    } catch (error) {
+      console.error("Erro ao remover salário:", error);
+    }
+  };
+
+  const clearWeeklyBudget = async () => {
+    if (!confirm("Remover a base manual do tracker semanal e voltar para o automático?")) return;
+    try {
+      await api.delete("/weekly-budget");
+      setWeeklyBudget(null);
+      setWeeklyMode("auto");
+      setWeeklyBudgetInput("");
+      setEditingWeeklyBudget(false);
+      loadData();
+    } catch (error) {
+      console.error("Erro ao limpar tracker semanal:", error);
+    }
+  };
+
+  const handleDeleteCommitment = async (id: number) => {
+    if (!confirm("Remover este compromisso fixo?")) return;
+    try {
+      await api.delete(`/recurring/${id}`);
+      loadData();
+    } catch (error) {
+      console.error("Erro ao remover compromisso:", error);
+    }
+  };
+
+  const handleDeleteScenario = async (id: number) => {
+    if (!confirm("Remover este cenário do mês?")) return;
+    try {
+      await api.delete(`/scenarios/${id}`);
+      loadData();
+    } catch (error) {
+      console.error("Erro ao remover cenário:", error);
+    }
+  };
+
   const handleDeleteTransaction = async (id: number) => {
     if (!confirm("Remover esta transação?")) return;
     try {
@@ -844,10 +1005,10 @@ export default function DashboardPage() {
     }
   };
 
-  const handleAddTransaction = async (e: React.FormEvent) => {
+  const handleSaveTransaction = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      await api.post("/transactions", {
+      const payload = {
         amount: parseFloat(newAmount),
         type: newType,
         description: newDescription,
@@ -855,42 +1016,41 @@ export default function DashboardPage() {
         payment_type: newType === "income" ? "debit" : newPaymentType,
         card_id: newType === "expense" && newPaymentType === "credit" && newCardId ? parseInt(newCardId) : null,
         created_at: newDate ? `${newDate}T12:00:00` : null,
-      });
+      };
+      await api.post(
+        editingTransactionId ? `/transactions/${editingTransactionId}` : "/transactions",
+        payload,
+        editingTransactionId ? "PUT" : "POST"
+      );
       setShowAddModal(false);
-      setNewAmount("");
-      setNewDescription("");
-      setNewCategoryId("");
-      setNewType("expense");
-      setNewPaymentType("debit");
-      setNewCardId("");
-      setNewDate(ymd(new Date()));
+      resetTransactionForm();
       loadData();
     } catch (error) {
-      console.error("Erro ao adicionar:", error);
+      console.error("Erro ao salvar transação:", error);
     }
   };
 
-  const handleAddPartnerExpense = async (e: React.FormEvent) => {
+  const handleSavePartnerExpense = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      await api.post("/partner-expenses", {
+      const payload = {
         description: partnerDescription,
         amount: parseFloat(partnerAmount),
         source: partnerSource || null,
         note: partnerNote || null,
         charge_date: partnerDate ? `${partnerDate}T12:00:00` : null,
         is_paid: partnerPaid,
-      });
+      };
+      await api.post(
+        editingPartnerId ? `/partner-expenses/${editingPartnerId}` : "/partner-expenses",
+        payload,
+        editingPartnerId ? "PUT" : "POST"
+      );
       setShowPartnerModal(false);
-      setPartnerDescription("");
-      setPartnerAmount("");
-      setPartnerSource("");
-      setPartnerNote("");
-      setPartnerDate(ymd(new Date()));
-      setPartnerPaid(false);
+      resetPartnerForm();
       loadData();
     } catch (error) {
-      console.error("Erro ao adicionar lançamento da esposa:", error);
+      console.error("Erro ao salvar lançamento da esposa:", error);
     }
   };
 
@@ -912,17 +1072,6 @@ export default function DashboardPage() {
     }
 
     setEditingWeeklyBudget(false);
-  };
-
-  const openBudgetEditor = (scope: BudgetScope) => {
-    setBudgetScope(scope);
-    const availableCategories = scope === "vrva"
-      ? categories.filter((category) => ["Mercados/Feiras", "Restaurante", "iFood"].includes(category.name))
-      : categories;
-    const firstCategory = availableCategories[0];
-    setBudgetCategoryId(firstCategory ? String(firstCategory.id) : "");
-    setBudgetAmount(firstCategory ? String(budgetMap.get(firstCategory.id) || "") : "");
-    setShowBudgetModal(true);
   };
 
   const handleBudgetCategoryChange = (categoryId: string) => {
@@ -949,31 +1098,31 @@ export default function DashboardPage() {
     }
   };
 
-  const handleAddCommitment = async (e: React.FormEvent) => {
+  const handleSaveCommitment = async (e: React.FormEvent) => {
     e.preventDefault();
     const amount = parseFloat(commitmentAmount);
     const dueDay = parseInt(commitmentDay, 10);
     if (Number.isNaN(amount) || amount <= 0 || Number.isNaN(dueDay) || dueDay < 1 || dueDay > 31) return;
 
     try {
-      await api.post("/recurring", {
+      const payload = {
         name: commitmentName,
         amount,
         due_day: dueDay,
         bank_name: commitmentSource || null,
         payment_type: commitmentPaymentType,
         category_id: commitmentCategoryId ? parseInt(commitmentCategoryId, 10) : null,
-      });
+      };
+      await api.post(
+        editingCommitmentId ? `/recurring/${editingCommitmentId}` : "/recurring",
+        payload,
+        editingCommitmentId ? "PUT" : "POST"
+      );
       setShowCommitmentModal(false);
-      setCommitmentName("");
-      setCommitmentAmount("");
-      setCommitmentDay(String(new Date().getDate()));
-      setCommitmentPaymentType("pix");
-      setCommitmentSource("");
-      setCommitmentCategoryId("");
+      resetCommitmentForm();
       loadData();
     } catch (error) {
-      console.error("Erro ao adicionar compromisso fixo:", error);
+      console.error("Erro ao salvar compromisso fixo:", error);
     }
   };
 
@@ -1031,7 +1180,7 @@ export default function DashboardPage() {
                 <span className="hidden sm:inline">Salário</span>
               </button>
               <button
-                onClick={() => setShowAddModal(true)}
+                onClick={() => openTransactionEditor()}
                 className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 text-white text-sm font-medium hover:from-violet-500 hover:to-indigo-500 transition-all"
               >
                 <Plus className="w-4 h-4" />
@@ -1092,8 +1241,14 @@ export default function DashboardPage() {
                   <div className="grid grid-cols-1 xl:grid-cols-[260px,1fr,330px] gap-4 items-start">
                     <div className="rounded-3xl border border-amber-400/15 bg-gradient-to-b from-[#9a4c12] to-[#7b3408] p-6 min-h-[260px] flex flex-col justify-between shadow-lg shadow-black/20">
                       <div>
-                        <p className="text-xs uppercase tracking-[0.24em] text-amber-100/70">Salário base</p>
-                        <p className="mt-3 break-words text-3xl font-semibold leading-tight text-white sm:text-4xl">{salaryTotal > 0 ? fmt(salaryTotal) : "—"}</p>
+                        <div className="flex items-start justify-between gap-3">
+                          <p className="text-xs uppercase tracking-[0.24em] text-amber-100/70">Salário base</p>
+                          <div className="flex items-center gap-2">
+                            <button onClick={() => setShowSalaryModal(true)} className="rounded-lg border border-white/10 px-2 py-1 text-[11px] text-amber-50/80 hover:bg-white/10">Editar</button>
+                            {salary ? <button onClick={handleDeleteSalary} className="rounded-lg border border-red-300/20 px-2 py-1 text-[11px] text-red-100/80 hover:bg-red-500/10">Remover</button> : null}
+                          </div>
+                        </div>
+                        <p className="mt-3 whitespace-nowrap text-2xl font-semibold leading-none tracking-tight text-white sm:text-3xl">{salaryTotal > 0 ? fmt(salaryTotal) : "—"}</p>
                       </div>
                       <div className="grid grid-cols-1 gap-3 mt-6">
                         <div className="rounded-2xl bg-black/10 border border-white/10 p-3">
@@ -1123,12 +1278,13 @@ export default function DashboardPage() {
                               <th className="px-4 py-3 text-right">Máximo Previsto</th>
                               <th className="px-4 py-3 text-right">Atual</th>
                               <th className="px-4 py-3 text-right">Cenários</th>
+                              <th className="px-4 py-3 text-right">Ações</th>
                             </tr>
                           </thead>
                           <tbody>
                             {categoryRows.length === 0 ? (
                               <tr>
-                                <td colSpan={4} className="px-4 py-8 text-center text-sm text-amber-100/60">
+                                <td colSpan={5} className="px-4 py-8 text-center text-sm text-amber-100/60">
                                   Nenhuma categoria com limite ou uso neste mês.
                                 </td>
                               </tr>
@@ -1139,6 +1295,12 @@ export default function DashboardPage() {
                                   <td className="px-4 py-3 text-right">{row.budget > 0 ? fmt(row.budget) : "R$ 0,00"}</td>
                                   <td className="px-4 py-3 text-right">{fmt(row.actual)}</td>
                                   <td className="px-4 py-3 text-right">{row.plannedScenario > 0 ? fmt(row.plannedScenario) : "—"}</td>
+                                  <td className="px-4 py-3">
+                                    <div className="flex items-center justify-end gap-2">
+                                      <button onClick={() => openBudgetEditor("all", row.id)} className="text-xs text-amber-100/80 hover:text-white">editar</button>
+                                      {row.budget > 0 ? <button onClick={() => handleDeleteBudget(row.id)} className="text-xs text-red-200/80 hover:text-red-100">remover</button> : null}
+                                    </div>
+                                  </td>
                                 </tr>
                               ))
                             )}
@@ -1183,7 +1345,13 @@ export default function DashboardPage() {
                             <h4 className="text-white font-semibold text-lg">{scenario.icon} {scenario.name}</h4>
                             {scenario.notes && <p className="text-sm text-gray-400 mt-1">{scenario.notes}</p>}
                           </div>
-                          <span className="text-yellow-400 font-semibold">{fmt(scenario.total_estimated)}</span>
+                          <div className="text-right">
+                            <span className="text-yellow-400 font-semibold">{fmt(scenario.total_estimated)}</span>
+                            <div className="mt-2 flex items-center justify-end gap-3">
+                              <button onClick={() => router.push("/dashboard/cenarios")} className="text-xs text-gray-400 hover:text-white">editar</button>
+                              <button onClick={() => handleDeleteScenario(scenario.id)} className="text-xs text-red-400 hover:text-red-300">remover</button>
+                            </div>
+                          </div>
                         </div>
                         <div className="mt-4 flex flex-wrap gap-2">
                           {scenario.items.map((item) => (
@@ -1222,6 +1390,7 @@ export default function DashboardPage() {
                           <th className="px-4 py-3 text-right">Atual</th>
                           <th className="px-4 py-3 text-right">Quantidade</th>
                           <th className="px-4 py-3 text-right">Média</th>
+                          <th className="px-4 py-3 text-right">Ações</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -1232,6 +1401,20 @@ export default function DashboardPage() {
                             <td className="px-4 py-3 text-right">{fmt(row.actual)}</td>
                             <td className="px-4 py-3 text-right">{row.frequency || "—"}</td>
                             <td className="px-4 py-3 text-right">{row.frequency > 0 ? fmt(row.average) : "—"}</td>
+                            <td className="px-4 py-3">
+                              <div className="flex items-center justify-end gap-2">
+                                {(() => {
+                                  const category = categories.find((item) => item.name === (row.label === "Mercado" ? "Mercados/Feiras" : row.label === "Ifood" ? "iFood" : row.label));
+                                  if (!category) return null;
+                                  return (
+                                    <>
+                                      <button onClick={() => openBudgetEditor("vrva", category.id)} className="text-xs text-gray-400 hover:text-white">editar</button>
+                                      {row.budget > 0 ? <button onClick={() => handleDeleteBudget(category.id)} className="text-xs text-red-400 hover:text-red-300">remover</button> : null}
+                                    </>
+                                  );
+                                })()}
+                              </div>
+                            </td>
                           </tr>
                         ))}
                       </tbody>
@@ -1246,7 +1429,7 @@ export default function DashboardPage() {
                   onToggle={() => togglePanel("partner")}
                   className="bg-[#2a2b30] border border-white/10"
                   actions={
-                    <button onClick={() => setShowPartnerModal(true)} className="px-3 py-2 rounded-xl bg-white/10 text-white text-sm hover:bg-white/15">
+                    <button onClick={() => openPartnerEditor()} className="px-3 py-2 rounded-xl bg-white/10 text-white text-sm hover:bg-white/15">
                       Novo
                     </button>
                   }
@@ -1274,7 +1457,12 @@ export default function DashboardPage() {
                               <td className="px-4 py-3 text-gray-400">{expense.source || "—"}</td>
                               <td className="px-4 py-3">{dayLabel(expense.charge_date)}</td>
                               <td className="px-4 py-3">{expense.is_paid ? <span className="text-emerald-400">Pago</span> : <span className="text-amber-400">Em aberto</span>}</td>
-                              <td className="px-4 py-3 text-right"><button onClick={() => handleDeletePartner(expense.id)} className="text-xs text-gray-400 hover:text-red-400">remover</button></td>
+                              <td className="px-4 py-3">
+                                <div className="flex items-center justify-end gap-3">
+                                  <button onClick={() => openPartnerEditor(expense)} className="text-xs text-gray-400 hover:text-white">editar</button>
+                                  <button onClick={() => handleDeletePartner(expense.id)} className="text-xs text-gray-400 hover:text-red-400">remover</button>
+                                </div>
+                              </td>
                             </tr>
                           ))
                         )}
@@ -1291,7 +1479,7 @@ export default function DashboardPage() {
                 onToggle={() => togglePanel("cards")}
                 className="bg-[#1f2125] border border-white/10"
                 actions={
-                  <button onClick={() => setShowCommitmentModal(true)} className="px-3 py-2 rounded-xl bg-white/10 text-white text-sm hover:bg-white/15">
+                  <button onClick={() => openCommitmentEditor()} className="px-3 py-2 rounded-xl bg-white/10 text-white text-sm hover:bg-white/15">
                     Novo compromisso
                   </button>
                 }
@@ -1312,11 +1500,12 @@ export default function DashboardPage() {
                         {commitmentSources.map((source) => (
                           <th key={source} className="px-4 py-3 text-right whitespace-nowrap">{source}</th>
                         ))}
+                        <th className="px-4 py-3 text-right">Ações</th>
                       </tr>
                     </thead>
                     <tbody>
                       {fixedCommitmentRows.length === 0 ? (
-                        <tr><td className="px-4 py-6 text-gray-400" colSpan={3 + commitmentSources.length}>Nenhum compromisso fixo detectado neste mês.</td></tr>
+                        <tr><td className="px-4 py-6 text-gray-400" colSpan={4 + commitmentSources.length}>Nenhum compromisso fixo detectado neste mês.</td></tr>
                       ) : (
                         fixedCommitmentRows.map((row) => (
                           <tr key={row.id} className="border-t border-[#1c4650] text-cyan-50/95 bg-[#12323a] even:bg-[#133941]">
@@ -1331,6 +1520,29 @@ export default function DashboardPage() {
                                 {row.sourceAllocations[source] ? fmt(row.sourceAllocations[source]) : ""}
                               </td>
                             ))}
+                            <td className="px-4 py-3">
+                              {row.kind === "recurring" ? (
+                                <div className="flex items-center justify-end gap-3">
+                                  <button
+                                    onClick={() => openCommitmentEditor(recurringExpenses.find((item) => `rec-${item.id}` === row.id))}
+                                    className="text-xs text-cyan-100/70 hover:text-white"
+                                  >
+                                    editar
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      const recurring = recurringExpenses.find((item) => `rec-${item.id}` === row.id);
+                                      if (recurring) handleDeleteCommitment(recurring.id);
+                                    }}
+                                    className="text-xs text-red-200/80 hover:text-red-100"
+                                  >
+                                    remover
+                                  </button>
+                                </div>
+                              ) : (
+                                <span className="text-xs text-cyan-100/45">gerenciado fora daqui</span>
+                              )}
+                            </td>
                           </tr>
                         ))
                       )}
@@ -1346,6 +1558,7 @@ export default function DashboardPage() {
                               {fmt(fixedCommitmentRows.reduce((sum, row) => sum + (row.sourceAllocations[source] || 0), 0))}
                             </td>
                           ))}
+                          <td className="px-4 py-3 text-right">—</td>
                         </tr>
                       </tfoot>
                     )}
@@ -1382,17 +1595,25 @@ export default function DashboardPage() {
                         <button onClick={() => setEditingWeeklyBudget(false)} className="p-2 rounded-xl bg-white/10 text-white hover:bg-white/15"><X className="w-4 h-4" /></button>
                       </div>
                     ) : (
-                      <button
-                        onClick={() => {
-                          setWeeklyMode("manual");
-                          setWeeklyBudgetInput(String((weeklyBudget || effectiveWeeklyBudget) * 4));
-                          setEditingWeeklyBudget(true);
-                        }}
-                        className="px-3 py-2 rounded-xl border border-white/10 text-gray-300 text-sm hover:bg-white/5 flex items-center gap-2"
-                      >
-                        <Pencil className="w-4 h-4" />
-                        Base manual mensal
-                      </button>
+                      <>
+                        <button
+                          onClick={() => {
+                            setWeeklyMode("manual");
+                            setWeeklyBudgetInput(String((weeklyBudget || effectiveWeeklyBudget) * 4));
+                            setEditingWeeklyBudget(true);
+                          }}
+                          className="px-3 py-2 rounded-xl border border-white/10 text-gray-300 text-sm hover:bg-white/5 flex items-center gap-2"
+                        >
+                          <Pencil className="w-4 h-4" />
+                          Base manual mensal
+                        </button>
+                        {weeklyBudget !== null ? (
+                          <button onClick={clearWeeklyBudget} className="px-3 py-2 rounded-xl border border-red-500/20 text-red-300 text-sm hover:bg-red-500/10 flex items-center gap-2">
+                            <Trash2 className="w-4 h-4" />
+                            Remover manual
+                          </button>
+                        ) : null}
+                      </>
                     )}
                   </div>
                 }
@@ -1516,6 +1737,7 @@ export default function DashboardPage() {
                                     </div>
                                     <div className="flex items-center gap-3 justify-between sm:justify-end">
                                       <span className={`text-sm font-semibold ${transaction.type === "income" ? "text-emerald-400" : "text-red-400"}`}>{transaction.type === "income" ? "+" : "-"}{fmt(transaction.amount)}</span>
+                                      <button onClick={() => openTransactionEditor(transaction)} className="text-xs text-gray-500 hover:text-white">editar</button>
                                       <button onClick={() => handleDeleteTransaction(transaction.id)} className="text-xs text-gray-500 hover:text-red-400">remover</button>
                                     </div>
                                   </div>
@@ -1544,13 +1766,19 @@ export default function DashboardPage() {
 
       {showAddModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowAddModal(false)} />
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => {
+            setShowAddModal(false);
+            resetTransactionForm();
+          }} />
           <div className="relative bg-[#1a1a2e] border border-white/10 rounded-2xl p-6 w-full max-w-md animate-slide-up shadow-2xl">
             <div className="flex items-center justify-between mb-6">
-              <h3 className="text-lg font-semibold text-white">Nova Transação</h3>
-              <button onClick={() => setShowAddModal(false)} className="p-1.5 rounded-lg hover:bg-white/5 text-gray-400 hover:text-white transition-colors"><X className="w-5 h-5" /></button>
+              <h3 className="text-lg font-semibold text-white">{editingTransactionId ? "Editar transação" : "Nova Transação"}</h3>
+              <button onClick={() => {
+                setShowAddModal(false);
+                resetTransactionForm();
+              }} className="p-1.5 rounded-lg hover:bg-white/5 text-gray-400 hover:text-white transition-colors"><X className="w-5 h-5" /></button>
             </div>
-            <form onSubmit={handleAddTransaction} className="space-y-4">
+            <form onSubmit={handleSaveTransaction} className="space-y-4">
               <div className="flex gap-2">
                 <button type="button" onClick={() => setNewType("expense")} className={`flex-1 py-2.5 rounded-xl text-sm font-medium transition-all ${newType === "expense" ? "bg-rose-500/20 text-rose-400 border border-rose-500/30" : "bg-white/5 text-gray-400 border border-white/5 hover:bg-white/10"}`}>📤 Despesa</button>
                 <button type="button" onClick={() => setNewType("income")} className={`flex-1 py-2.5 rounded-xl text-sm font-medium transition-all ${newType === "income" ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30" : "bg-white/5 text-gray-400 border border-white/5 hover:bg-white/10"}`}>📥 Receita</button>
@@ -1587,7 +1815,7 @@ export default function DashboardPage() {
                 <option value="" className="bg-[#1a1a2e]">Selecionar categoria</option>
                 {categories.map((cat) => <option key={cat.id} value={cat.id} className="bg-[#1a1a2e]">{cat.icon} {cat.name}</option>)}
               </select>
-              <button type="submit" className="w-full py-3 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 text-white font-semibold">Adicionar</button>
+              <button type="submit" className="w-full py-3 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 text-white font-semibold">{editingTransactionId ? "Salvar alterações" : "Adicionar"}</button>
             </form>
           </div>
         </div>
@@ -1595,20 +1823,26 @@ export default function DashboardPage() {
 
       {showPartnerModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowPartnerModal(false)} />
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => {
+            setShowPartnerModal(false);
+            resetPartnerForm();
+          }} />
           <div className="relative bg-[#1f2125] border border-white/10 rounded-2xl p-6 w-full max-w-md shadow-2xl">
             <div className="flex items-center justify-between mb-6">
-              <h3 className="text-lg font-semibold text-white">Novo lançamento da esposa</h3>
-              <button onClick={() => setShowPartnerModal(false)} className="p-1.5 rounded-lg hover:bg-white/5 text-gray-400 hover:text-white transition-colors"><X className="w-5 h-5" /></button>
+              <h3 className="text-lg font-semibold text-white">{editingPartnerId ? "Editar lançamento da esposa" : "Novo lançamento da esposa"}</h3>
+              <button onClick={() => {
+                setShowPartnerModal(false);
+                resetPartnerForm();
+              }} className="p-1.5 rounded-lg hover:bg-white/5 text-gray-400 hover:text-white transition-colors"><X className="w-5 h-5" /></button>
             </div>
-            <form onSubmit={handleAddPartnerExpense} className="space-y-4">
+            <form onSubmit={handleSavePartnerExpense} className="space-y-4">
               <input type="text" value={partnerDescription} onChange={(e) => setPartnerDescription(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white" placeholder="Descrição" required />
               <input type="number" step="0.01" min="0.01" value={partnerAmount} onChange={(e) => setPartnerAmount(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white" placeholder="Valor" required />
               <input type="text" value={partnerSource} onChange={(e) => setPartnerSource(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white" placeholder="Origem / cartão" />
               <input type="text" value={partnerNote} onChange={(e) => setPartnerNote(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white" placeholder="Observação" />
               <input type="date" value={partnerDate} onChange={(e) => setPartnerDate(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white" />
               <label className="flex items-center gap-2 text-sm text-gray-300"><input type="checkbox" checked={partnerPaid} onChange={(e) => setPartnerPaid(e.target.checked)} className="accent-emerald-500" /> Já foi pago por ela</label>
-              <button type="submit" className="w-full py-3 rounded-xl bg-slate-700 hover:bg-slate-600 text-white font-semibold">Salvar</button>
+              <button type="submit" className="w-full py-3 rounded-xl bg-slate-700 hover:bg-slate-600 text-white font-semibold">{editingPartnerId ? "Salvar alterações" : "Salvar"}</button>
             </form>
           </div>
         </div>
@@ -1630,7 +1864,12 @@ export default function DashboardPage() {
                 ))}
               </select>
               <input type="number" step="0.01" min="0" value={budgetAmount} onChange={(e) => setBudgetAmount(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white" placeholder="Valor limite" required />
-              <button type="submit" className="w-full py-3 rounded-xl bg-gradient-to-r from-amber-600 to-orange-600 text-white font-semibold">Salvar limite</button>
+              <div className="flex items-center gap-3">
+                <button type="submit" className="flex-1 py-3 rounded-xl bg-gradient-to-r from-amber-600 to-orange-600 text-white font-semibold">Salvar limite</button>
+                {budgetCategoryId && budgetMap.get(Number(budgetCategoryId)) ? (
+                  <button type="button" onClick={() => handleDeleteBudget(Number(budgetCategoryId))} className="px-4 py-3 rounded-xl border border-red-500/20 text-red-300 hover:bg-red-500/10">Remover</button>
+                ) : null}
+              </div>
             </form>
           </div>
         </div>
@@ -1638,13 +1877,19 @@ export default function DashboardPage() {
 
       {showCommitmentModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowCommitmentModal(false)} />
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => {
+            setShowCommitmentModal(false);
+            resetCommitmentForm();
+          }} />
           <div className="relative bg-[#1f2125] border border-white/10 rounded-2xl p-6 w-full max-w-md shadow-2xl">
             <div className="flex items-center justify-between mb-6">
-              <h3 className="text-lg font-semibold text-white">Novo compromisso fixo</h3>
-              <button onClick={() => setShowCommitmentModal(false)} className="p-1.5 rounded-lg hover:bg-white/5 text-gray-400 hover:text-white transition-colors"><X className="w-5 h-5" /></button>
+              <h3 className="text-lg font-semibold text-white">{editingCommitmentId ? "Editar compromisso fixo" : "Novo compromisso fixo"}</h3>
+              <button onClick={() => {
+                setShowCommitmentModal(false);
+                resetCommitmentForm();
+              }} className="p-1.5 rounded-lg hover:bg-white/5 text-gray-400 hover:text-white transition-colors"><X className="w-5 h-5" /></button>
             </div>
-            <form onSubmit={handleAddCommitment} className="space-y-4">
+            <form onSubmit={handleSaveCommitment} className="space-y-4">
               <input type="text" value={commitmentName} onChange={(e) => setCommitmentName(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white" placeholder="Nome do serviço / compromisso" required />
               <div className="grid grid-cols-2 gap-3">
                 <input type="number" step="0.01" min="0.01" value={commitmentAmount} onChange={(e) => setCommitmentAmount(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white" placeholder="Valor" required />
@@ -1661,7 +1906,10 @@ export default function DashboardPage() {
                 <option value="" className="bg-[#1f2125]">Categoria opcional</option>
                 {categories.map((cat) => <option key={cat.id} value={cat.id} className="bg-[#1f2125]">{cat.icon} {cat.name}</option>)}
               </select>
-              <button type="submit" className="w-full py-3 rounded-xl bg-slate-700 hover:bg-slate-600 text-white font-semibold">Salvar compromisso</button>
+              <div className="flex items-center gap-3">
+                <button type="submit" className="flex-1 py-3 rounded-xl bg-slate-700 hover:bg-slate-600 text-white font-semibold">{editingCommitmentId ? "Salvar alterações" : "Salvar compromisso"}</button>
+                {editingCommitmentId ? <button type="button" onClick={() => handleDeleteCommitment(editingCommitmentId)} className="px-4 py-3 rounded-xl border border-red-500/20 text-red-300 hover:bg-red-500/10">Remover</button> : null}
+              </div>
             </form>
           </div>
         </div>

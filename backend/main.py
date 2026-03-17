@@ -75,6 +75,10 @@ DEFAULT_CATEGORIES = [
     {"name": "Presentes",       "icon": "🎁", "color": "#EC4899"},
     {"name": "Lazer",           "icon": "🎮", "color": "#06B6D4"},
     {"name": "Saúde",           "icon": "💊", "color": "#16A34A"},
+    {"name": "Tecnologia",      "icon": "💻", "color": "#3B82F6"},
+    {"name": "Segurança",       "icon": "🔐", "color": "#0F766E"},
+    {"name": "Seguros",         "icon": "🛡️", "color": "#2563EB"},
+    {"name": "Pet",             "icon": "🐾", "color": "#F97316"},
     {"name": "CPTM",            "icon": "🚇", "color": "#3B82F6"},
     {"name": "Itens de Lazer",  "icon": "🎯", "color": "#8B5CF6"},
     {"name": "E-Commerce",      "icon": "📦", "color": "#F97316"},
@@ -295,6 +299,48 @@ def create_transaction(
     return db.query(Transaction).filter(Transaction.id == transaction.id).first()
 
 
+@app.put("/api/transactions/{transaction_id}", response_model=TransactionResponse)
+def update_transaction(
+    transaction_id: int,
+    data: TransactionCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    transaction = (
+        db.query(Transaction)
+        .filter(
+            Transaction.id == transaction_id,
+            Transaction.user_id == current_user.id,
+        )
+        .first()
+    )
+    if not transaction:
+        raise HTTPException(status_code=404, detail="Transação não encontrada")
+
+    if data.payment_type == "credit" and not data.card_id:
+        raise HTTPException(status_code=400, detail="Selecione um cartão para gastos no crédito")
+
+    if data.payment_type == "credit" and data.card_id:
+        card = db.query(CreditCardAccount).filter(
+            CreditCardAccount.id == data.card_id,
+            CreditCardAccount.user_id == current_user.id,
+        ).first()
+        if not card:
+            raise HTTPException(status_code=404, detail="Cartão não encontrado")
+
+    transaction.amount = data.amount
+    transaction.type = data.type
+    transaction.description = data.description
+    transaction.category_id = data.category_id
+    transaction.payment_type = data.payment_type
+    transaction.card_id = data.card_id
+    transaction.created_at = data.created_at or transaction.created_at
+
+    db.commit()
+    db.refresh(transaction)
+    return db.query(Transaction).filter(Transaction.id == transaction.id).first()
+
+
 @app.delete("/api/transactions/{transaction_id}")
 def delete_transaction(
     transaction_id: int,
@@ -461,6 +507,19 @@ def set_salary_config(
     db.commit()
     db.refresh(config)
     return config
+
+
+@app.delete("/api/salary/config")
+def delete_salary_config(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    config = db.query(SalaryConfig).filter(SalaryConfig.user_id == current_user.id).first()
+    if not config:
+        raise HTTPException(status_code=404, detail="Nenhuma configuração de salário encontrada")
+    db.delete(config)
+    db.commit()
+    return {"detail": "Configuração de salário removida"}
 
 
 @app.get("/api/salary/calendar", response_model=List[SalaryMonthCalendar])
@@ -1047,6 +1106,19 @@ def set_weekly_budget(
     db.commit()
     db.refresh(wb)
     return wb
+
+
+@app.delete("/api/weekly-budget")
+def delete_weekly_budget(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    wb = db.query(WeeklyBudget).filter(WeeklyBudget.user_id == current_user.id).first()
+    if not wb:
+        raise HTTPException(status_code=404, detail="Orçamento semanal não configurado")
+    db.delete(wb)
+    db.commit()
+    return {"detail": "Orçamento semanal removido"}
 
 
 # ==================== GASTOS DA ESPOSA / REEMBOLSO ====================

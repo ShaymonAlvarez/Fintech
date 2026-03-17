@@ -57,6 +57,23 @@ CATEGORY_KEYWORDS = {
         "saúde", "farmácia", "médico", "remédio", "hospital",
         "dentista", "plano", "academia", "consulta", "exame",
     ],
+    "Tecnologia": [
+        "tecnologia", "notebook", "computador", "celular", "iphone",
+        "android", "software", "app", "aplicativo", "licença", "mouse",
+        "teclado", "monitor", "internet", "nuvem",
+    ],
+    "Segurança": [
+        "segurança", "alarme", "câmera", "camera", "monitoramento",
+        "portaria", "fechadura", "rastreador", "cofre",
+    ],
+    "Seguros": [
+        "seguro", "seguros", "apólice", "apolice", "proteção",
+        "protecao", "sinistro", "seguradora",
+    ],
+    "Pet": [
+        "pet", "cachorro", "gato", "ração", "racao", "veterinário",
+        "veterinario", "banho", "tosa", "coleira", "areia",
+    ],
     "Educação": [
         "educação", "curso", "livro", "escola", "faculdade",
         "material", "mensalidade", "aula", "treinamento",
