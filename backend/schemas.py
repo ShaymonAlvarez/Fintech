@@ -382,6 +382,9 @@ class PartnerExpenseCreate(BaseModel):
     note: Optional[str] = None
     charge_date: Optional[datetime] = None
     is_paid: bool = False
+    is_installment: bool = False
+    installment_number: Optional[int] = None
+    total_installments: Optional[int] = None
 
 
 class PartnerExpenseResponse(BaseModel):
@@ -392,6 +395,10 @@ class PartnerExpenseResponse(BaseModel):
     note: Optional[str]
     charge_date: datetime
     is_paid: bool
+    is_installment: bool
+    installment_number: Optional[int]
+    total_installments: Optional[int]
+    installment_group: Optional[str]
     created_at: datetime
 
     class Config:

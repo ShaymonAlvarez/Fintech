@@ -1,4 +1,6 @@
 import threading
+from calendar import monthrange
+from uuid import uuid4
 from fastapi import FastAPI, Depends, HTTPException, Query, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
@@ -98,6 +100,13 @@ def _ensure_column_exists(table_name: str, column_name: str, column_sql: str):
         connection.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_sql}"))
 
 
+def _add_months(base_date: datetime, months: int) -> datetime:
+    year = base_date.year + ((base_date.month - 1 + months) // 12)
+    month = ((base_date.month - 1 + months) % 12) + 1
+    day = min(base_date.day, monthrange(year, month)[1])
+    return base_date.replace(year=year, month=month, day=day)
+
+
 @app.get("/")
 def health_check():
     return {"status": "ok", "app": "Finanças API"}
@@ -108,6 +117,10 @@ async def startup():
     Base.metadata.create_all(bind=engine)
     _ensure_column_exists("transactions", "payment_type", "payment_type VARCHAR DEFAULT 'debit'")
     _ensure_column_exists("transactions", "card_id", "card_id INTEGER")
+    _ensure_column_exists("partner_expenses", "is_installment", "is_installment BOOLEAN DEFAULT FALSE")
+    _ensure_column_exists("partner_expenses", "installment_number", "installment_number INTEGER")
+    _ensure_column_exists("partner_expenses", "total_installments", "total_installments INTEGER")
+    _ensure_column_exists("partner_expenses", "installment_group", "installment_group VARCHAR")
     db = SessionLocal()
     try:
         existing_names = {c.name for c in db.query(Category).all()}
@@ -1145,14 +1158,49 @@ def create_partner_expense(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    charge_date = data.charge_date or datetime.utcnow()
+
+    if data.is_installment:
+        if not data.total_installments or data.total_installments < 2:
+            raise HTTPException(status_code=400, detail="Informe o total de parcelas")
+        if not data.installment_number or data.installment_number < 1 or data.installment_number > data.total_installments:
+            raise HTTPException(status_code=400, detail="Informe a parcela atual corretamente")
+
+        group_id = str(uuid4())
+        created_rows: list[PartnerExpense] = []
+        for installment_index in range(data.installment_number, data.total_installments + 1):
+            expense = PartnerExpense(
+                user_id=current_user.id,
+                description=data.description,
+                amount=data.amount,
+                source=data.source,
+                note=data.note,
+                charge_date=_add_months(charge_date, installment_index - data.installment_number),
+                is_paid=data.is_paid if installment_index == data.installment_number else False,
+                is_installment=True,
+                installment_number=installment_index,
+                total_installments=data.total_installments,
+                installment_group=group_id,
+            )
+            db.add(expense)
+            created_rows.append(expense)
+
+        db.commit()
+        db.refresh(created_rows[0])
+        return created_rows[0]
+
     expense = PartnerExpense(
         user_id=current_user.id,
         description=data.description,
         amount=data.amount,
         source=data.source,
         note=data.note,
-        charge_date=data.charge_date or datetime.utcnow(),
+        charge_date=charge_date,
         is_paid=data.is_paid,
+        is_installment=False,
+        installment_number=None,
+        total_installments=None,
+        installment_group=None,
     )
     db.add(expense)
     db.commit()
@@ -1180,6 +1228,19 @@ def update_partner_expense(
     expense.note = data.note
     expense.charge_date = data.charge_date or expense.charge_date
     expense.is_paid = data.is_paid
+    expense.is_installment = data.is_installment
+    if data.is_installment:
+        if not data.total_installments or data.total_installments < 2:
+            raise HTTPException(status_code=400, detail="Informe o total de parcelas")
+        if not data.installment_number or data.installment_number < 1 or data.installment_number > data.total_installments:
+            raise HTTPException(status_code=400, detail="Informe a parcela atual corretamente")
+        expense.installment_number = data.installment_number
+        expense.total_installments = data.total_installments
+        expense.installment_group = expense.installment_group or str(uuid4())
+    else:
+        expense.installment_number = None
+        expense.total_installments = None
+        expense.installment_group = None
     db.commit()
     db.refresh(expense)
     return expense

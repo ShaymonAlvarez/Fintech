@@ -207,6 +207,10 @@ class PartnerExpense(Base):
     note = Column(String, nullable=True)
     charge_date = Column(DateTime, nullable=False, default=datetime.utcnow)
     is_paid = Column(Boolean, default=False)
+    is_installment = Column(Boolean, default=False)
+    installment_number = Column(Integer, nullable=True)
+    total_installments = Column(Integer, nullable=True)
+    installment_group = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     user = relationship("User")

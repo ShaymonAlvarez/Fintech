@@ -179,6 +179,10 @@ interface PartnerExpense {
   note: string | null;
   charge_date: string;
   is_paid: boolean;
+  is_installment: boolean;
+  installment_number: number | null;
+  total_installments: number | null;
+  installment_group: string | null;
 }
 
 interface FixedCommitmentRow {
@@ -380,6 +384,9 @@ export default function DashboardPage() {
   const [partnerNote, setPartnerNote] = useState("");
   const [partnerDate, setPartnerDate] = useState(ymd(new Date()));
   const [partnerPaid, setPartnerPaid] = useState(false);
+  const [partnerIsInstallment, setPartnerIsInstallment] = useState(false);
+  const [partnerInstallmentNumber, setPartnerInstallmentNumber] = useState("1");
+  const [partnerTotalInstallments, setPartnerTotalInstallments] = useState("2");
   const [budgetCategoryId, setBudgetCategoryId] = useState("");
   const [budgetAmount, setBudgetAmount] = useState("");
   const [commitmentName, setCommitmentName] = useState("");
@@ -869,6 +876,9 @@ export default function DashboardPage() {
     setPartnerNote("");
     setPartnerDate(ymd(new Date()));
     setPartnerPaid(false);
+    setPartnerIsInstallment(false);
+    setPartnerInstallmentNumber("1");
+    setPartnerTotalInstallments("2");
   };
 
   const openPartnerEditor = (expense?: PartnerExpense) => {
@@ -885,6 +895,9 @@ export default function DashboardPage() {
     setPartnerNote(expense.note || "");
     setPartnerDate(expense.charge_date.slice(0, 10));
     setPartnerPaid(expense.is_paid);
+    setPartnerIsInstallment(expense.is_installment);
+    setPartnerInstallmentNumber(String(expense.installment_number || 1));
+    setPartnerTotalInstallments(String(expense.total_installments || 2));
     setShowPartnerModal(true);
   };
 
@@ -1040,6 +1053,9 @@ export default function DashboardPage() {
         note: partnerNote || null,
         charge_date: partnerDate ? `${partnerDate}T12:00:00` : null,
         is_paid: partnerPaid,
+        is_installment: partnerIsInstallment,
+        installment_number: partnerIsInstallment ? parseInt(partnerInstallmentNumber, 10) : null,
+        total_installments: partnerIsInstallment ? parseInt(partnerTotalInstallments, 10) : null,
       };
       await api.post(
         editingPartnerId ? `/partner-expenses/${editingPartnerId}` : "/partner-expenses",
@@ -1452,7 +1468,11 @@ export default function DashboardPage() {
                         ) : (
                           partnerExpenses.map((expense) => (
                             <tr key={expense.id} className="border-t border-white/5 text-gray-200">
-                              <td className="px-4 py-3">{expense.description}{expense.note ? <span className="block text-xs text-gray-500">{expense.note}</span> : null}</td>
+                              <td className="px-4 py-3">
+                                <span className="block">{expense.description}{expense.is_installment && expense.installment_number && expense.total_installments ? ` ${expense.installment_number}/${expense.total_installments}` : ""}</span>
+                                {expense.note ? <span className="block text-xs text-gray-500">{expense.note}</span> : null}
+                                {expense.is_installment && expense.installment_number && expense.total_installments ? <span className="mt-1 inline-flex rounded-full bg-violet-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-violet-200">Parcelado</span> : null}
+                              </td>
                               <td className="px-4 py-3 text-right">{fmt(expense.amount)}</td>
                               <td className="px-4 py-3 text-gray-400">{expense.source || "—"}</td>
                               <td className="px-4 py-3">{dayLabel(expense.charge_date)}</td>
@@ -1836,11 +1856,40 @@ export default function DashboardPage() {
               }} className="p-1.5 rounded-lg hover:bg-white/5 text-gray-400 hover:text-white transition-colors"><X className="w-5 h-5" /></button>
             </div>
             <form onSubmit={handleSavePartnerExpense} className="space-y-4">
+              <div className="grid grid-cols-2 gap-2 rounded-xl bg-white/[0.03] p-2">
+                <button
+                  type="button"
+                  onClick={() => setPartnerIsInstallment(false)}
+                  className={`rounded-xl px-3 py-2 text-sm transition ${!partnerIsInstallment ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/30" : "text-gray-400 hover:bg-white/5 border border-transparent"}`}
+                >
+                  À vista
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPartnerIsInstallment(true)}
+                  className={`rounded-xl px-3 py-2 text-sm transition ${partnerIsInstallment ? "bg-violet-500/15 text-violet-300 border border-violet-500/30" : "text-gray-400 hover:bg-white/5 border border-transparent"}`}
+                >
+                  Parcelado
+                </button>
+              </div>
               <input type="text" value={partnerDescription} onChange={(e) => setPartnerDescription(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white" placeholder="Descrição" required />
-              <input type="number" step="0.01" min="0.01" value={partnerAmount} onChange={(e) => setPartnerAmount(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white" placeholder="Valor" required />
+              <input type="number" step="0.01" min="0.01" value={partnerAmount} onChange={(e) => setPartnerAmount(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white" placeholder={partnerIsInstallment ? "Valor da parcela" : "Valor"} required />
+              {partnerIsInstallment ? (
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="mb-1 block text-xs text-gray-400">Parcela atual</label>
+                    <input type="number" min="1" value={partnerInstallmentNumber} onChange={(e) => setPartnerInstallmentNumber(e.target.value)} className="w-full rounded-xl bg-white/5 border border-white/10 px-4 py-3 text-white" placeholder="Ex: 5" required />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs text-gray-400">Total de parcelas</label>
+                    <input type="number" min="2" value={partnerTotalInstallments} onChange={(e) => setPartnerTotalInstallments(e.target.value)} className="w-full rounded-xl bg-white/5 border border-white/10 px-4 py-3 text-white" placeholder="Ex: 8" required />
+                  </div>
+                </div>
+              ) : null}
               <input type="text" value={partnerSource} onChange={(e) => setPartnerSource(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white" placeholder="Origem / cartão" />
               <input type="text" value={partnerNote} onChange={(e) => setPartnerNote(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white" placeholder="Observação" />
               <input type="date" value={partnerDate} onChange={(e) => setPartnerDate(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white" />
+              {partnerIsInstallment ? <p className="text-xs text-violet-200/80">O sistema vai criar automaticamente as próximas parcelas a partir desta data. Ex.: 5/8 cria a parcela atual e replica até 8/8 nos meses seguintes.</p> : null}
               <label className="flex items-center gap-2 text-sm text-gray-300"><input type="checkbox" checked={partnerPaid} onChange={(e) => setPartnerPaid(e.target.checked)} className="accent-emerald-500" /> Já foi pago por ela</label>
               <button type="submit" className="w-full py-3 rounded-xl bg-slate-700 hover:bg-slate-600 text-white font-semibold">{editingPartnerId ? "Salvar alterações" : "Salvar"}</button>
             </form>
